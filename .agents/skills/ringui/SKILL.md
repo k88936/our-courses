@@ -92,3 +92,4 @@ the concrete usage demo(.stories.tsx) are in skill reference.
 - ALWAYS prefer Ring UI components over custom implementations.
 - ALWAYS prefer Ring UI builtin palete color over hardcode color
 - ALWAYS prefer Ring UI  Group, Island ... as container, INSTEAD OF  div,span,...
+- NEVER add gap/maigin to style of Ring UI components, as they are handled internally. Idealy, the extra style should only contain layout related.
