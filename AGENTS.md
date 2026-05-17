@@ -1,3 +1,6 @@
+# Introduce
+This is a university college-level course planning app.
+
 # REQUIREMENTS
 * NEVER use extra .css use tailwindcss instead
 
