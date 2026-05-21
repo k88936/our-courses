@@ -1,1 +1,3 @@
-supabase gen types typescript --project-id edwpbvbkfwgvhsgeppdz > database.types.ts
+```shell
+supabase gen types typescript --project-id edwpbvbkfwgvhsgeppdz > src/database.types.ts
+```
