@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "print_all": "tsx test/print_all.ts"
   },
   "dependencies": {
     "@jetbrains/ring-ui-built": "^7.0.107",
