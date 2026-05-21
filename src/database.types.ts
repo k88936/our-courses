@@ -105,6 +105,36 @@ export type Database = {
           },
         ]
       }
+      course_prereq_choice_sets: {
+        Row: {
+          course_id: string
+          prereq_choice_set: number
+        }
+        Insert: {
+          course_id: string
+          prereq_choice_set: number
+        }
+        Update: {
+          course_id?: string
+          prereq_choice_set?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_prereq_choice_sets_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["course_id"]
+          },
+          {
+            foreignKeyName: "course_prereq_choice_sets_prereq_choice_set_fkey"
+            columns: ["prereq_choice_set"]
+            isOneToOne: false
+            referencedRelation: "choice_sets"
+            referencedColumns: ["set_id"]
+          },
+        ]
+      }
       course_prerequisites: {
         Row: {
           course_id: string
@@ -159,71 +189,35 @@ export type Database = {
         }
         Relationships: []
       }
-      degree_choice_courses: {
-        Row: {
-          choice_id: number | null
-          course_id: string | null
-          id: number
-        }
-        Insert: {
-          choice_id?: number | null
-          course_id?: string | null
-          id?: number
-        }
-        Update: {
-          choice_id?: number | null
-          course_id?: string | null
-          id?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "degree_choice_courses_choice_id_fkey"
-            columns: ["choice_id"]
-            isOneToOne: false
-            referencedRelation: "degree_choice_requirements"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "degree_choice_courses_course_id_fkey"
-            columns: ["course_id"]
-            isOneToOne: false
-            referencedRelation: "courses"
-            referencedColumns: ["course_id"]
-          },
-        ]
-      }
       degree_choice_requirements: {
         Row: {
-          group_id: number | null
           id: number
           max_select: number
           min_select: number
-          name: string | null
+          set_id: number | null
           track_code: string | null
         }
         Insert: {
-          group_id?: number | null
           id?: number
           max_select?: number
           min_select?: number
-          name?: string | null
+          set_id?: number | null
           track_code?: string | null
         }
         Update: {
-          group_id?: number | null
           id?: number
           max_select?: number
           min_select?: number
-          name?: string | null
+          set_id?: number | null
           track_code?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "degree_choice_requirements_group_id_fkey"
-            columns: ["group_id"]
+            foreignKeyName: "degree_choice_requirements_set_id_fkey"
+            columns: ["set_id"]
             isOneToOne: false
-            referencedRelation: "course_groups"
-            referencedColumns: ["group_id"]
+            referencedRelation: "choice_sets"
+            referencedColumns: ["set_id"]
           },
           {
             foreignKeyName: "degree_choice_requirements_track_code_fkey"
