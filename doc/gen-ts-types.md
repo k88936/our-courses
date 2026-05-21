@@ -1,0 +1,1 @@
+supabase gen types typescript --project-id edwpbvbkfwgvhsgeppdz > database.types.ts
