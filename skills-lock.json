@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "ringui": {
+      "source": "k88936/ringui-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ringui/SKILL.md",
+      "computedHash": "55dbdc883ef198b09657ec46a83e143abab31f0bc5c349640e6b7becbe79431b"
+    },
+    "supabase": {
+      "source": "supabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/supabase/SKILL.md",
+      "computedHash": "1bb189e255c0e91161f14c618dce0eccf68174ceb963664cef7761b2f90cb466"
+    }
+  }
+}
