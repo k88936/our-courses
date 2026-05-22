@@ -192,22 +192,22 @@ export type Database = {
       degree_choice_requirements: {
         Row: {
           id: number
-          max_select: number
-          min_select: number
+          max_select_override: number | null
+          min_select_override: number | null
           set_id: number | null
           track_code: string | null
         }
         Insert: {
           id?: number
-          max_select?: number
-          min_select?: number
+          max_select_override?: number | null
+          min_select_override?: number | null
           set_id?: number | null
           track_code?: string | null
         }
         Update: {
           id?: number
-          max_select?: number
-          min_select?: number
+          max_select_override?: number | null
+          min_select_override?: number | null
           set_id?: number | null
           track_code?: string | null
         }

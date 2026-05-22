@@ -221,12 +221,16 @@ function printDegreeTracks(
                 const courseList = cs.choice_set_courses
                     .map((csc) => csc.courses?.name ?? csc.course_id)
                     .join("、");
+                const minSelect = rc.min_select_override ?? cs.min_select;
+                const maxSelect = rc.max_select_override ?? cs.max_select;
                 lines.push(
-                    `选课限制：在「${cs.name}」中${rc.min_select === rc.max_select ? `必修 ${rc.min_select} 门` : `至少选 ${rc.min_select} 门，至多选 ${rc.max_select} 门`}：${courseList}`,
+                    `选课限制：在「${cs.name}」中${minSelect === maxSelect ? `必修 ${minSelect} 门` : `至少选 ${minSelect} 门，至多选 ${maxSelect} 门`}：${courseList}`,
                 );
             } else if (cs) {
+                const minSelect = rc.min_select_override ?? cs.min_select;
+                const maxSelect = rc.max_select_override ?? cs.max_select;
                 lines.push(
-                    `选课限制：在「${cs.name}」中${rc.min_select === rc.max_select ? `必修 ${rc.min_select} 门` : `至少选 ${rc.min_select} 门，至多选 ${rc.max_select} 门`}`,
+                    `选课限制：在「${cs.name}」中${minSelect === maxSelect ? `必修 ${minSelect} 门` : `至少选 ${minSelect} 门，至多选 ${maxSelect} 门`}`,
                 );
             }
         }

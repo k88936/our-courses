@@ -142,12 +142,12 @@ Marks a course group as mandatory or elective for a degree track.
 ### degree_choice_requirements
 Degree‑specific override of a `choice_sets` constraint (e.g. "AE students must pick at least 1 from this set, while other tracks have no restriction").
 
-| Column       | Type                                     | Description                                                          |
-|--------------|------------------------------------------|----------------------------------------------------------------------|
-| `id`         | SERIAL PK                                | Auto-increment                                                       |
-| `track_code` | VARCHAR(20) → `degree_tracks.track_code` | Degree track                                                         |
-| `set_id`     | INT → `choice_sets.set_id`               | The choice set being constrained                                     |
-| `min_select` | INT                                      | Minimum courses for this degree (overrides `choice_sets.min_select`) |
-| `max_select` | INT                                      | Maximum courses for this degree (overrides `choice_sets.max_select`) |
+| Column                | Type                                     | Description                                                                   |
+|-----------------------|------------------------------------------|-------------------------------------------------------------------------------|
+| `id`                  | SERIAL PK                                | Auto-increment                                                                |
+| `track_code`          | VARCHAR(20) → `degree_tracks.track_code` | Degree track                                                                  |
+| `set_id`              | INT → `choice_sets.set_id`               | The choice set being constrained                                              |
+| `min_select_override` | INT?                                     | Minimum courses for this degree (`NULL` = use `choice_sets.min_select`)       |
+| `max_select_override` | INT?                                     | Maximum courses for this degree (`NULL` = use `choice_sets.max_select`)       |
 
-**Example**: AE overrides the "Astrodynamics / Flight Dynamics" set to `min_select=1`.
+**Example**: AE overrides the "Astrodynamics / Flight Dynamics" set to `min_select_override=1`.
