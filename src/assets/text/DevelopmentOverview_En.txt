@@ -1,0 +1,12 @@
+OfCourses — Smart Course Planning Assistant
+
+OfCourses is an intelligent course selection planning system designed for the Dushi Academy (笃实书院) of Tsinghua University. Built with the modern Vite + React 19 tech stack, it provides students with an intuitive and efficient course planning experience.
+
+Core Features:
+- Course Catalog: Browse all courses offered by the academy, with filtering by module, group, and recommended semester
+- Smart Planning: Plan your courses by semester with visual timeline support
+- Curriculum Display: View the complete curriculum structure organized by modules and groups
+- Degree Track Tracking: Track progress across 5 degree tracks (AE, EM, PE, IE, SE)
+- Prerequisite Checking: Automatic prerequisite validation when selecting courses
+
+This project is continuously developed and maintained by the Dushi Academy student team.
