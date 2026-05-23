@@ -1,0 +1,18 @@
+{
+  "name": "@our-courses/data",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dump_data": "tsx test/dump_data.ts"
+  },
+  "exports": {
+    "./course": "./src/course.ts",
+    "./degree_track": "./src/degree_track.ts",
+    "./teach_plan": "./src/teach_plan.ts",
+    "./model": "./src/model.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.1"
+  }
+}

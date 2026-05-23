@@ -16,15 +16,15 @@ export type Database = {
     Tables: {
       choice_set_courses: {
         Row: {
-          course_id: string
+          course_id: number
           set_id: number
         }
         Insert: {
-          course_id: string
+          course_id: number
           set_id: number
         }
         Update: {
-          course_id?: string
+          course_id?: number
           set_id?: number
         }
         Relationships: [
@@ -107,15 +107,15 @@ export type Database = {
       }
       course_prereq_choice_sets: {
         Row: {
-          course_id: string
+          course_id: number
           prereq_choice_set: number
         }
         Insert: {
-          course_id: string
+          course_id: number
           prereq_choice_set: number
         }
         Update: {
-          course_id?: string
+          course_id?: number
           prereq_choice_set?: number
         }
         Relationships: [
@@ -137,16 +137,16 @@ export type Database = {
       }
       course_prerequisites: {
         Row: {
-          course_id: string
-          prereq_course_id: string
+          course_id: number
+          prereq_course_id: number
         }
         Insert: {
-          course_id: string
-          prereq_course_id: string
+          course_id: number
+          prereq_course_id: number
         }
         Update: {
-          course_id?: string
-          prereq_course_id?: string
+          course_id?: number
+          prereq_course_id?: number
         }
         Relationships: [
           {
@@ -167,17 +167,17 @@ export type Database = {
       }
       course_recommended_semesters: {
         Row: {
-          course_id: string
+          course_id: number
           id: number
           semester_id: number
         }
         Insert: {
-          course_id: string
+          course_id: number
           id?: number
           semester_id: number
         }
         Update: {
-          course_id?: string
+          course_id?: number
           id?: number
           semester_id?: number
         }
@@ -200,21 +200,21 @@ export type Database = {
       }
       courses: {
         Row: {
-          course_id: string
+          course_id: number
           credits: number
           is_new: boolean | null
           module_type: string | null
           name: string
         }
         Insert: {
-          course_id: string
+          course_id: number
           credits: number
           is_new?: boolean | null
           module_type?: string | null
           name: string
         }
         Update: {
-          course_id?: string
+          course_id?: number
           credits?: number
           is_new?: boolean | null
           module_type?: string | null
@@ -227,22 +227,22 @@ export type Database = {
           id: number
           max_select_override: number | null
           min_select_override: number | null
-          set_id: number | null
-          track_code: string | null
+          set_id: number
+          track_code: string
         }
         Insert: {
           id?: number
           max_select_override?: number | null
           min_select_override?: number | null
-          set_id?: number | null
-          track_code?: string | null
+          set_id: number
+          track_code: string
         }
         Update: {
           id?: number
           max_select_override?: number | null
           min_select_override?: number | null
-          set_id?: number | null
-          track_code?: string | null
+          set_id?: number
+          track_code?: string
         }
         Relationships: [
           {
@@ -263,19 +263,19 @@ export type Database = {
       }
       degree_course_requirements: {
         Row: {
-          course_id: string | null
+          course_id: number
           id: number
-          track_code: string | null
+          track_code: string
         }
         Insert: {
-          course_id?: string | null
+          course_id: number
           id?: number
-          track_code?: string | null
+          track_code: string
         }
         Update: {
-          course_id?: string | null
+          course_id?: number
           id?: number
-          track_code?: string | null
+          track_code?: string
         }
         Relationships: [
           {
@@ -296,22 +296,22 @@ export type Database = {
       }
       degree_group_requirements: {
         Row: {
-          group_id: number | null
+          group_id: number
           id: number
-          is_main: boolean | null
-          track_code: string | null
+          is_main: boolean
+          track_code: string
         }
         Insert: {
-          group_id?: number | null
+          group_id: number
           id?: number
-          is_main?: boolean | null
-          track_code?: string | null
+          is_main?: boolean
+          track_code: string
         }
         Update: {
-          group_id?: number | null
+          group_id?: number
           id?: number
-          is_main?: boolean | null
-          track_code?: string | null
+          is_main?: boolean
+          track_code?: string
         }
         Relationships: [
           {
@@ -353,17 +353,17 @@ export type Database = {
       }
       group_courses: {
         Row: {
-          course_id: string
+          course_id: number
           group_id: number
           note: string | null
         }
         Insert: {
-          course_id: string
+          course_id: number
           group_id: number
           note?: string | null
         }
         Update: {
-          course_id?: string
+          course_id?: number
           group_id?: number
           note?: string | null
         }

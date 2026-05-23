@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "print_all": "tsx test/print_all.ts"
+    "dump_data": "tsx test/dump_data.ts"
   },
   "dependencies": {
     "@jetbrains/ring-ui-built": "^7.0.107",
+    "@our-courses/data": "workspace:*",
     "@supabase/supabase-js": "^2.106.1",
     "@tailwindcss/vite": "^4.2.4",
     "@thu-info/lib": "^3.15.2",
