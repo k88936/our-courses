@@ -5,6 +5,7 @@ export type TranslationKey =
     | "nav.curriculum"
     | "nav.workspace"
     | "nav.about"
+    | "nav.tools"
     | "nav.defaultUser"
     | "nav.language"
     | "home.welcome"
@@ -86,6 +87,7 @@ export type TranslationKey =
     | "workspace.errorCreditUnder"
     | "workspace.warningCreditOver"
     | "workspace.warningCreditUnder"
+    | "workspace.peRequired"
     | "workspace.noDeleteEmpty";
 
 type Translations = Record<Locale, Record<TranslationKey, string>>;
@@ -96,6 +98,7 @@ export const translations: Translations = {
         "nav.curriculum": "培养方案",
         "nav.workspace": "工作台",
         "nav.about": "关于我们",
+        "nav.tools": "综合工具",
         "nav.defaultUser": "默认用户",
         "nav.language": "中/EN",
         "nav.semester": "当前学期",
@@ -175,6 +178,7 @@ export const translations: Translations = {
         "workspace.errorCreditUnder": "学分不足下限",
         "workspace.warningCreditOver": "接近学分上限",
         "workspace.warningCreditUnder": "学分偏低",
+        "workspace.peRequired": "本学期有体育课要求，请选择体育课",
         "workspace.noDeleteEmpty": "暂无数据可删除",
         "about.title": "关于我们",
         "about.description": "OfCourses —— 你的智能选课规划助手。",
@@ -184,6 +188,7 @@ export const translations: Translations = {
         "nav.curriculum": "Curriculum",
         "nav.workspace": "Workspace",
         "nav.about": "About Us",
+        "nav.tools": "Tools",
         "nav.defaultUser": "Default User",
         "nav.language": "中/EN",
         "nav.semester": "Current Semester",
@@ -263,6 +268,7 @@ export const translations: Translations = {
         "workspace.errorCreditUnder": "Credits below minimum",
         "workspace.warningCreditOver": "Near credit limit",
         "workspace.warningCreditUnder": "Low credits",
+        "workspace.peRequired": "PE course required this semester",
         "workspace.noDeleteEmpty": "No data to delete",
         "about.title": "About Us",
         "about.description": "OfCourses — Your smart course planning assistant.",

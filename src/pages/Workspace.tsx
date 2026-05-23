@@ -104,6 +104,19 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [forceSaveData, setForceSaveData] = useState<string[] | null>(null);
   const [diagExpanded, setDiagExpanded] = useState(false);
+  const [dismissedDiag, setDismissedDiag] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("oc_diag_dismiss") ?? "[]")); }
+    catch { return new Set(); }
+  });
+  const [choiceConflict, setChoiceConflict] = useState<{
+    courseId: string;
+    courseName: string;
+    setName: string;
+    conflictId: string;
+    conflictName: string;
+  } | null>(null);
+  const [clearConfirm, setClearConfirm] = useState(false);
+  const [recommendEnabled, setRecommendEnabled] = useState(true);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -138,6 +151,10 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
   useEffect(() => {
     if (!stagingSemester && availableStagingSemesters.length > 0) {
+      setStagingSemester(availableStagingSemesters[0]);
+    }
+    // If current staging semester is no longer available, reset
+    if (stagingSemester && availableStagingSemesters.length > 0 && !availableStagingSemesters.includes(stagingSemester)) {
       setStagingSemester(availableStagingSemesters[0]);
     }
   }, [availableStagingSemesters, stagingSemester]);
@@ -217,6 +234,37 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     return map;
   }, []);
 
+  // PE courses by semester
+  const PE_BY_SEMESTER: Record<string, string[]> = {
+    "大一·秋季": ["10720011"],
+    "大一·春季": ["10720021"],
+    "大二·秋季": ["10720031"],
+    "大二·春季": ["10720041"],
+    "大三·秋季": ["10720110"],
+    "大三·春季": ["10720120"],
+    "大四·秋季": ["10720130"],
+    "大四·春季": ["10720140"],
+  };
+
+  // Course → choice sets it belongs to (for multi-select display)
+  const courseChoiceSets = useMemo(() => {
+    const map = new Map<string, Array<{setId: number; setName: string; minSelect: number; maxSelect: number; siblings: Array<{courseId: string; name: string}>}>>();
+    for (const [setId, courseIds] of choiceSetCourseMap.entries()) {
+      const cs = choiceSetMap.get(setId);
+      if (!cs) continue;
+      const siblings = courseIds.map((cid) => ({
+        courseId: cid,
+        name: courseMap.get(cid)?.name ?? cid,
+      }));
+      for (const cid of courseIds) {
+        const prev = map.get(cid) ?? [];
+        prev.push({setId, setName: cs.name, minSelect: cs.min_select, maxSelect: cs.max_select, siblings: siblings.filter((s) => s.courseId !== cid)});
+        map.set(cid, prev);
+      }
+    }
+    return map;
+  }, [choiceSetCourseMap, choiceSetMap, courseMap]);
+
   const getSemesterChecks = (sem: string, selected: string[]): Array<{type: "error" | "warning"; msg: string}> => {
     const checks: Array<{type: "error" | "warning"; msg: string}> = [];
     const total = calcSemesterCredits(sem, selected);
@@ -225,13 +273,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
     if (total > limit.max) {
       checks.push({
-        type: "error",
-        msg: locale === "zh" ? `学分 ${total} > 上限 ${limit.max}` : `${total} credits > max ${limit.max}`,
-      });
-    } else if (total > limit.max - 3) {
-      checks.push({
         type: "warning",
-        msg: locale === "zh" ? `学分 ${total}，接近上限 ${limit.max}` : `${total} credits, near limit ${limit.max}`,
+        msg: locale === "zh" ? `学分 ${total} > 上限 ${limit.max}` : `${total} credits > max ${limit.max}`,
       });
     }
 
@@ -242,7 +285,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       });
     }
 
-    // Prerequisite checks
+    // Prerequisite checks — WARNING (not error) unless forced (TBD)
     const allTaken = new Set<string>();
     for (const [, ids] of Object.entries(savedHistory)) ids.forEach((id) => allTaken.add(id));
     selected.forEach((id) => allTaken.add(id));
@@ -254,22 +297,57 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
           const cName = tName(cid, courseMap.get(cid)?.name ?? cid);
           const pName = tName(pid, courseMap.get(pid)?.name ?? pid);
           checks.push({
-            type: "error",
+            type: "warning",
             msg: locale === "zh" ? `「${cName}」需先修「${pName}」` : `"${cName}" needs prereq "${pName}"`,
           });
         }
       }
     }
 
-    // Choice set checks
+    // Choice set checks — WARNING (mutual exclusion across all taken courses)
     for (const [setId, setCourseIds] of choiceSetCourseMap.entries()) {
       const cs = choiceSetMap.get(setId);
       if (!cs) continue;
       const selectedInSet = selected.filter((cid) => setCourseIds.includes(cid));
-      if (selectedInSet.length > (cs.max_select ?? 1)) {
+      const totalInSet = [...allTaken].filter((cid) => setCourseIds.includes(cid)).length;
+      if (totalInSet > (cs.max_select ?? 1)) {
+        checks.push({
+          type: "warning",
+          msg: locale === "zh" ? `「${cs.name}」最多选 ${cs.max_select} 门` : `"${cs.name}" max ${cs.max_select}`,
+        });
+      } else if (selectedInSet.length > (cs.max_select ?? 1)) {
+        checks.push({
+          type: "warning",
+          msg: locale === "zh" ? `「${cs.name}」最多选 ${cs.max_select} 门` : `"${cs.name}" max ${cs.max_select}`,
+        });
+      }
+    }
+
+    // Duplicate course check — ERROR (course already in savedHistory for other semesters)
+    for (const cid of selected) {
+      for (const [otherSem, ids] of Object.entries(savedHistory)) {
+        if (otherSem === sem) continue;
+        if (ids.includes(cid)) {
+          const cName = tName(cid, courseMap.get(cid)?.name ?? cid);
+          checks.push({
+            type: "error",
+            msg: locale === "zh" ? `「${cName}」已在 ${abbreviateSemester(otherSem)} 中选择过` : `"${cName}" already taken in ${abbreviateSemester(otherSem)}`,
+          });
+          break;
+        }
+      }
+    }
+
+    // PE requirement check — ERROR (only for saved history semesters, not for staging)
+    const isBootCampOrSummer = sem.includes("开学前") || sem.includes("夏季");
+    const hasSavedData = savedHistory[sem] !== undefined;
+    if (hasSavedData && !isBootCampOrSummer) {
+      const peCourses = PE_BY_SEMESTER[sem] ?? [];
+      const hasPe = peCourses.some((pid) => selected.includes(pid));
+      if (peCourses.length > 0 && !hasPe) {
         checks.push({
           type: "error",
-          msg: locale === "zh" ? `「${cs.name}」最多选 ${cs.max_select} 门` : `"${cs.name}" max ${cs.max_select}`,
+          msg: t("workspace.peRequired"),
         });
       }
     }
@@ -277,7 +355,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     return checks;
   };
 
-  // Build diagnostic data for all semesters
+  // Build diagnostic data for all semesters + current staging
   const diagData = useMemo(() => {
     const entries: Array<{sem: string; checks: Array<{type: "error" | "warning"; msg: string}>}> = [];
     const allSems = [...historySemesters, ...availableStagingSemesters];
@@ -289,8 +367,13 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       const checks = getSemesterChecks(sem, saved);
       if (checks.length > 0) entries.push({sem, checks});
     }
+    // Also include current staging selection (if different from saved)
+    if (stagingSemester && selectedCourses.size > 0 && !seen.has(stagingSemester)) {
+      const checks = getSemesterChecks(stagingSemester, [...selectedCourses]);
+      if (checks.length > 0) entries.push({sem: stagingSemester, checks});
+    }
     return entries;
-  }, [historySemesters, availableStagingSemesters, savedHistory, customCourses]);
+  }, [historySemesters, availableStagingSemesters, savedHistory, customCourses, stagingSemester, selectedCourses]);
 
   // --- Import / Export ---
   const handleExport = () => {
@@ -334,6 +417,41 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   };
 
   const toggleSelected = (courseId: string) => {
+    // Build full set of all taken courses across all history + current selection
+    const allTaken = new Set(selectedCourses);
+    for (const [, ids] of Object.entries(savedHistory)) {
+      ids.forEach((id) => allTaken.add(id));
+    }
+
+    const isAlreadySelected = selectedCourses.has(courseId);
+    if (!isAlreadySelected) {
+      // Check duplicate: course already in savedHistory
+      let foundInHistory = false;
+      for (const [, ids] of Object.entries(savedHistory)) {
+        if (ids.includes(courseId)) { foundInHistory = true; break; }
+      }
+      if (foundInHistory) {
+        // We still let them add it, but run choice set conflict check below
+      }
+
+      // Check choice set conflict across ALL taken courses
+      const csInfo = courseChoiceSets.get(courseId);
+      if (csInfo && csInfo.length > 0) {
+        for (const cs of csInfo) {
+          const conflictSibling = cs.siblings.find((s) => allTaken.has(s.courseId));
+          if (conflictSibling) {
+            setChoiceConflict({
+              courseId,
+              courseName: courseMap.get(courseId)?.name ?? courseId,
+              setName: cs.setName,
+              conflictId: conflictSibling.courseId,
+              conflictName: conflictSibling.name,
+            });
+            return;
+          }
+        }
+      }
+    }
     setSelectedCourses((prev) => {
       const next = new Set(prev);
       if (next.has(courseId)) next.delete(courseId);
@@ -391,47 +509,16 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   // --- Validation logic ---
   const [validationErrors, setValidationErrors] = useState<string[] | null>(null);
 
-  const validateSelection = (courseIds: string[]): string[] => {
-    const errors: string[] = [];
-    // All taken courses = all previously saved + current selection
-    const allTaken = new Set<string>();
-    for (const [, ids] of Object.entries(savedHistory)) {
-      ids.forEach((id) => allTaken.add(id));
-    }
-    courseIds.forEach((id) => allTaken.add(id));
-
-    // Check prerequisites
-    for (const cid of courseIds) {
-      const prereqs = prereqMap.get(cid) ?? [];
-      for (const pid of prereqs) {
-        if (!allTaken.has(pid)) {
-          const cName = tName(cid, courseMap.get(cid)?.name ?? cid);
-          const pName = tName(pid, courseMap.get(pid)?.name ?? pid);
-          errors.push(
-            locale === "zh"
-              ? `「${cName}」需要先修「${pName}」`
-              : `"${cName}" requires prerequisite "${pName}"`
-          );
-        }
+  // Clear validationErrors when selectedCourses change and checks pass
+  useEffect(() => {
+    if (validationErrors && stagingSemester) {
+      const checks = getSemesterChecks(stagingSemester, [...selectedCourses]);
+      const hasErrors = checks.some((c) => c.type === "error");
+      if (!hasErrors) {
+        setValidationErrors(null);
       }
     }
-
-    // Check choice set conflicts
-    for (const [setId, setCourseIds] of choiceSetCourseMap.entries()) {
-      const cs = choiceSetMap.get(setId);
-      if (!cs) continue;
-      const selectedInSet = courseIds.filter((cid) => setCourseIds.includes(cid));
-      if (selectedInSet.length > (cs.max_select ?? 1)) {
-        errors.push(
-          locale === "zh"
-            ? `「${cs.name}」最多选 ${cs.max_select} 门，当前选了 ${selectedInSet.length} 门`
-            : `"${cs.name}" max ${cs.max_select}, selected ${selectedInSet.length}`
-        );
-      }
-    }
-
-    return errors;
-  };
+  }, [selectedCourses, stagingSemester]);
 
   // --- Category display (locale-aware) ---
   const CAT_LABELS = locale === "zh" ? FOUNDATION_ZH : FOUNDATION_EN;
@@ -490,6 +577,254 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     ],
     [unsetLabel, t]
   );
+
+  // --- Foundation enhancement groups (基础加强) ---
+  const FOUNDATION_GROUP_IDS = useMemo(() => {
+    const ids = new Set<number>();
+    for (const g of allGroups) {
+      if (["COMP_BASIS", "OR_STAT", "MECH_BASIS"].includes(g.group_code)) {
+        ids.add(g.group_id);
+      }
+    }
+    return ids;
+  }, [allGroups]);
+
+  // Course → module IDs it belongs to
+  const courseModuleMap = useMemo(() => {
+    const map = new Map<string, Set<number>>();
+    for (const [cid, infos] of courseGroupInfo) {
+      for (const info of infos) {
+        if (info.moduleId !== null) {
+          const prev = map.get(cid) ?? new Set();
+          prev.add(info.moduleId);
+          map.set(cid, prev);
+        }
+      }
+    }
+    return map;
+  }, [courseGroupInfo]);
+
+  // Foundation group → course_ids
+  const foundationCourseIds = useMemo(() => {
+    const map = new Map<number, Set<string>>();
+    for (const gc of structuredData.group_courses) {
+      if (FOUNDATION_GROUP_IDS.has(gc.group_id)) {
+        const set = new Set(gc.course_ids);
+        map.set(gc.group_id, set);
+      }
+    }
+    return map;
+  }, [FOUNDATION_GROUP_IDS]);
+
+  // All selected course IDs across history + current staging
+  const allSelectedIds = useMemo(() => {
+    const set = new Set(selectedCourses);
+    for (const [, ids] of Object.entries(savedHistory)) {
+      ids.forEach((id) => set.add(id));
+    }
+    return set;
+  }, [selectedCourses, savedHistory]);
+
+  // --- Module scoring config (per-module per-course A/B scores) ---
+  const moduleScoringConfig = useMemo(() => {
+    const modConfig = new Map<number, {aPerCourse: number; bPerCourse: number}>();
+    const courseModInfo = new Map<string, Map<number, {isA: boolean; isB: boolean}>>();
+    const modACount = new Map<number, number>();
+    const modBCount = new Map<number, number>();
+
+    for (const gc of structuredData.group_courses) {
+      const group = groupMap.get(gc.group_id);
+      if (!group || group.module_id === null) continue;
+      const isA = group.group_code.endsWith("A");
+      const isB = group.group_code.endsWith("B");
+      if (isA) modACount.set(group.module_id, (modACount.get(group.module_id) ?? 0) + gc.course_ids.length);
+      if (isB) modBCount.set(group.module_id, (modBCount.get(group.module_id) ?? 0) + gc.course_ids.length);
+      for (const cid of gc.course_ids) {
+        if (!courseModInfo.has(cid)) courseModInfo.set(cid, new Map());
+        const cm = courseModInfo.get(cid)!;
+        if (!cm.has(group.module_id)) cm.set(group.module_id, {isA: false, isB: false});
+        const e = cm.get(group.module_id)!;
+        if (isA) e.isA = true;
+        if (isB) e.isB = true;
+      }
+    }
+
+    for (const modId of new Set([...modACount.keys(), ...modBCount.keys()])) {
+      const aCount = modACount.get(modId) ?? 0;
+      const bCount = modBCount.get(modId) ?? 0;
+      modConfig.set(modId, {
+        aPerCourse: aCount > 0 ? 240 / aCount : 0,
+        bPerCourse: bCount > 0 ? 80 / bCount : 0,
+      });
+    }
+
+    return {modConfig, courseModInfo};
+  }, [groupMap]);
+
+  // --- Module score map (accumulated from selected courses) ---
+  const moduleScoreMap = useMemo(() => {
+    const map = new Map<number, number>();
+    const {courseModInfo, modConfig} = moduleScoringConfig;
+    for (const cid of allSelectedIds) {
+      const cm = courseModInfo.get(cid);
+      if (!cm) continue;
+      for (const [modId, {isA, isB}] of cm) {
+        const cfg = modConfig.get(modId);
+        if (!cfg) continue;
+        let add = 0;
+        if (isA) add += cfg.aPerCourse;
+        if (isB) add += cfg.bPerCourse;
+        map.set(modId, (map.get(modId) ?? 0) + add);
+      }
+    }
+    return map;
+  }, [allSelectedIds, moduleScoringConfig]);
+
+  // --- Foundation direction scores ---
+  const foundationActive = useMemo(() => {
+    const map = new Map<string, number>();
+    const FOUNDATION_MAP: Array<[string, string]> = [
+      ["COMP_BASIS", "II"],
+      ["OR_STAT", "III"],
+      ["MECH_BASIS", "I"],
+    ];
+    for (const [gCode] of FOUNDATION_MAP) {
+      for (const [gid, cids] of foundationCourseIds) {
+        const g = groupMap.get(gid);
+        if (g && g.group_code === gCode) {
+          let cnt = 0;
+          for (const cid of allSelectedIds) { if (cids.has(cid)) cnt++; }
+          if (cnt >= 2) map.set(gCode, 80);
+        }
+      }
+    }
+    return map;
+  }, [allSelectedIds, foundationCourseIds, groupMap]);
+
+  // --- Staging semester derived data (for scoring + hint) ---
+  const stagingCourseInfo = useMemo(() => {
+    const stagingCourseIds = new Set(
+      (stagingSemester ? (semesterMap.get(stagingSemester) ?? []).map((c) => c.course_id) : [])
+    );
+    const peCourseIds = new Set(stagingSemester ? (PE_BY_SEMESTER[stagingSemester] ?? []) : []);
+    const isSummer = stagingSemester?.includes("开学前") || stagingSemester?.includes("夏季");
+    const needPe = stagingSemester && !isSummer && peCourseIds.size > 0
+      ? ![...allSelectedIds].some((id) => peCourseIds.has(id))
+      : false;
+
+    // 书院通识/进阶实践 courses in staging semester + whether still needed
+    const stagingShuyuanIds = new Set<string>();
+    const stagingShijianIds = new Set<string>();
+    for (const cid of stagingCourseIds) {
+      const infos = courseGroupInfo.get(cid) ?? [];
+      for (const info of infos) {
+        if (info.groupCode === "SHUYUAN_GE") stagingShuyuanIds.add(cid);
+        if (info.groupCode === "SHIJIAN") stagingShijianIds.add(cid);
+      }
+    }
+    const needShuyuan = stagingShuyuanIds.size > 0 && ![...allSelectedIds].some((id) => stagingShuyuanIds.has(id));
+    const needShijian = stagingShijianIds.size > 0 && ![...allSelectedIds].some((id) => stagingShijianIds.has(id));
+
+    // All special-course IDs in staging (for scoring boost)
+    const stagingSpecialIds = new Set([...stagingShuyuanIds, ...stagingShijianIds]);
+
+    return {stagingCourseIds, peCourseIds, isSummer, needPe, needShuyuan, needShijian, stagingSpecialIds};
+  }, [stagingSemester, semesterMap, courseGroupInfo, allSelectedIds]);
+
+  // --- Per-course semester bonus map ---
+  const COURSE_BONUS: Record<string, Array<{semesterMatch: string; bonus: number}>> = {
+    "10691342": [{semesterMatch: "大一·秋季", bonus: 62}],
+    "30160023": [{semesterMatch: "大一·春季", bonus: 62}],
+    "24100023": [{semesterMatch: "大一·秋季", bonus: 61}],
+    "14920032": [{semesterMatch: "大一·春季", bonus: 61}],
+    "10421403": [{semesterMatch: "大一·春季", bonus: 61}],
+    "44100203": [{semesterMatch: "大二·秋季", bonus: 11}],
+  };
+
+  // --- Recommendation scores ---
+  const courseScores = useMemo(() => {
+    const scores = new Map<string, number>();
+    const {courseModInfo} = moduleScoringConfig;
+    const {stagingCourseIds, peCourseIds, needPe, stagingSpecialIds} = stagingCourseInfo;
+
+    // Build set of all course IDs already saved in history
+    const historyCourseIds = new Set<string>();
+    for (const [, ids] of Object.entries(savedHistory)) {
+      ids.forEach((id) => historyCourseIds.add(id));
+    }
+
+    const FOUNDATION_MAP: Array<[string, number, number]> = [
+      ["COMP_BASIS", 4, 8],
+      ["OR_STAT", 9, 13],
+      ["MECH_BASIS", 1, 3],
+    ];
+
+    for (const c of courses) {
+      let score = 0;
+
+      // Special: PE +400 if needed and in staging semester
+      if (needPe && peCourseIds.has(c.course_id)) score += 400;
+
+      // Special: 书院通识/进阶实践 in staging semester +400
+      if (stagingSpecialIds.has(c.course_id)) score += 400;
+
+      // Semester boost: courses in staging semester +100
+      if (stagingCourseIds.has(c.course_id)) score += 100;
+
+      // Foundation boost: max applicable foundation direction (+80)
+      const cMods = courseModuleMap.get(c.course_id);
+      if (cMods && foundationActive.size > 0) {
+        let maxF = 0;
+        for (const [gCode, fScore] of foundationActive) {
+          const entry = FOUNDATION_MAP.find(([c]) => c === gCode);
+          if (!entry) continue;
+          const [, lo, hi] = entry;
+          for (const m of cMods) { if (m >= lo && m <= hi) { maxF = Math.max(maxF, fScore); } }
+        }
+        score += maxF;
+      }
+
+      // Module boost: max module score among modules this course belongs to
+      const cm = courseModInfo.get(c.course_id);
+      if (cm) {
+        let maxMod = 0;
+        for (const [modId] of cm) {
+          const ms = moduleScoreMap.get(modId) ?? 0;
+          if (ms > maxMod) maxMod = ms;
+        }
+        score += maxMod;
+      }
+
+      // Category extra: +10 per category (min 1)
+      const cats = courseGroupInfo.get(c.course_id) ?? [];
+      score += Math.max(cats.length, 1) * 10;
+
+      // Per-course semester-specific bonus
+      const bonusRules = COURSE_BONUS[c.course_id];
+      if (bonusRules && stagingSemester) {
+        for (const rule of bonusRules) {
+          if (rule.semesterMatch === stagingSemester) {
+            score += rule.bonus;
+          }
+        }
+      }
+
+      // History deduction: courses already recorded in history get -400
+      if (historyCourseIds.has(c.course_id)) {
+        score -= 400;
+      }
+
+      scores.set(c.course_id, score);
+    }
+
+    return scores;
+  }, [courses, stagingCourseInfo, courseModuleMap, foundationActive, moduleScoreMap, courseGroupInfo, moduleScoringConfig, savedHistory]);
+
+  const hasActiveFilters =
+    filters.group !== "all" ||
+    filters.semester !== "all" ||
+    filters.module !== "all" ||
+    searchText.trim().length > 0;
 
   // --- Filtered Courses ---
   const filteredCourses = useMemo(() => {
@@ -563,8 +898,17 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       result = result.filter((c) => idSet.has(c.course_id));
     }
 
+    // Apply recommendation sort if no search/filter is active
+    if (recommendEnabled && !hasActiveFilters) {
+      result = [...result].sort((a, b) => {
+        const sa = courseScores.get(a.course_id) ?? 0;
+        const sb = courseScores.get(b.course_id) ?? 0;
+        return sb - sa;
+      });
+    }
+
     return result;
-  }, [courses, filters, courseGroupInfo, semesterMap, searchText, tName]);
+  }, [courses, filters, courseGroupInfo, semesterMap, searchText, tName, recommendEnabled, courseScores, hasActiveFilters]);
 
   // --- Scroll history to rightmost ---
   useEffect(() => {
@@ -589,12 +933,6 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     setSearchText("");
   };
 
-  const hasActiveFilters =
-    filters.group !== "all" ||
-    filters.semester !== "all" ||
-    filters.module !== "all" ||
-    searchText.trim().length > 0;
-
   const inputTheme = isDark ? "dark" : "light";
   const moduleEnabled = filters.module !== "all" && filters.module !== "none";
 
@@ -609,13 +947,17 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
         >
           <Island className={`flex h-full flex-col ${bgCard}`}>
             <Header border>
-              <div className="flex w-full items-center gap-4">
-                <span className={`text-sm font-semibold ${textDark}`}>{t("workspace.history")}</span>
-                <div className="ml-auto flex items-center gap-1">
-                  <Button onClick={() => setShowImportModal(true)}>{t("workspace.importExport")}</Button>
-                  <Button onClick={() => setLeftExpanded(!leftExpanded)}>
-                    {leftExpanded ? t("workspace.fold") : t("workspace.unfold")}
-                  </Button>
+              <div className="flex w-full flex-col">
+                <div className="flex w-full items-center gap-4">
+                  <span className={`text-sm font-semibold text-nowrap ${textDark}`}>{t("workspace.history")}</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <Button onClick={handleExport}>{t("workspace.exportBtn")}</Button>
+                    <Button onClick={() => setShowImportModal(true)}>{t("workspace.importBtn")}</Button>
+                    <Button onClick={() => setClearConfirm(true)}>{locale === "zh" ? "清除" : "Clear"}</Button>
+                    <Button onClick={() => setLeftExpanded(!leftExpanded)}>
+                      {leftExpanded ? t("workspace.fold") : t("workspace.unfold")}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </Header>
@@ -639,12 +981,14 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                     const savedIds = savedHistory[sem] ?? [];
                     // Get full course objects for display
                     const savedCourses = savedIds.map((id) => courseMap.get(id)).filter(Boolean) as typeof courses;
-                    const totalCredits = savedCourses.reduce((sum, c) => sum + c.credits, 0);
+                    // Custom courses for this semester
+                    const semesterCustom = customCourses[sem] ?? [];
+                    const totalDisplayCourses = savedCourses.length + semesterCustom.length;
+                    const totalDisplayCredits = savedCourses.reduce((sum, c) => sum + c.credits, 0) + semesterCustom.reduce((sum, c) => sum + c.credits, 0);
                     // Default courses from semesterMap (for showing default data)
                     const defaultCourses = semesterMap.get(sem) ?? [];
                     // Display: only show saved data, no default fallback
                     const displayCourses = savedIds.length > 0 ? savedCourses : [];
-                    const displayCredits = displayCourses.reduce((sum, c) => sum + c.credits, 0);
                     const hasSaved = savedIds.length > 0;
                     return (
                       <div
@@ -704,7 +1048,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           </div>
                         </div>
                         <div className={`mb-1 text-[10px] ${textMuted}`}>
-                          {locale === "zh" ? `共${displayCourses.length}门，${displayCredits}学分` : `${displayCourses.length} courses, ${displayCredits} cr.`}
+                          {locale === "zh" ? `共${totalDisplayCourses}门，${totalDisplayCredits}学分` : `${totalDisplayCourses} courses, ${totalDisplayCredits} cr.`}
                         </div>
 
                         {/* Delete confirmation */}
@@ -749,66 +1093,134 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                             <span className={`shrink-0 ${textMuted}`}>{c.credits}</span>
                           </div>
                         ))}
+                        {/* Custom courses in history */}
+                        {savedIds.length > 0 && (customCourses[sem] ?? []).length > 0 && (
+                          <div className={`my-1 border-t pt-1 ${borderLight}`}>
+                            {(customCourses[sem] ?? []).map((cc) => (
+                              <div key={cc.id} className={`flex justify-between gap-1 rounded px-1 py-0.5 text-xs ${hoverBg}`}>
+                                <span className={isDark ? "text-white/60 italic" : "text-gray-500 italic"} style={{wordBreak: "break-word", maxWidth: "calc(100% - 2rem)"}}>
+                                  {cc.name}
+                                </span>
+                                <span className={`shrink-0 ${textMuted}`}>{cc.credits}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
             </Content>
-          </Island>
 
-          {/* Diagnostics below history */}
-          {diagData.length > 0 && (
-            <Island className={`flex flex-col ${bgCard}`} style={{flex: diagExpanded ? "1.2" : "0.6", minHeight: 0}}>
-              <Header border>
-                <div className="flex w-full items-center gap-2">
-                  <span className={`text-sm font-semibold ${textDark}`}>
-                    {locale === "zh" ? "诊断信息" : "Diagnostics"}
+            {/* Diagnostics inside history Island */}
+            {diagData.length > 0 && (
+              <div className={`border-t shrink-0 flex flex-col ${borderCls}`} style={{flex: diagExpanded ? "0.33" : "0 0 auto", minHeight: 0}}>
+                <div className={`flex items-center gap-2 px-3 py-1.5 text-xs ${bgHeader}`}>
+                  <span className={`font-semibold ${textDark}`}>
+                    {locale === "zh" ? "诊断" : "Diagnostics"}
                   </span>
-                  <span className={`text-[10px] ${textMuted}`}>({diagData.length})</span>
+                  {(() => {
+                    const totalErrors = diagData.reduce((s, e) => s + e.checks.filter((c) => c.type === "error" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
+                    const totalWarnings = diagData.reduce((s, e) => s + e.checks.filter((c) => c.type === "warning" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
+                    return (
+                      <span className={`text-[10px] ${textMuted}`}>
+                        {totalErrors > 0 && <span className="text-red-400">❌({totalErrors})</span>}
+                        {totalWarnings > 0 && <span className="text-yellow-400 ml-1">⚠({totalWarnings})</span>}
+                      </span>
+                    );
+                  })()}
                   <div className="ml-auto">
                     <Button onClick={() => setDiagExpanded(!diagExpanded)}>
                       {diagExpanded ? t("workspace.fold") : t("workspace.unfold")}
                     </Button>
                   </div>
                 </div>
-              </Header>
-              <Content className="flex-1 overflow-auto p-0" style={{minHeight: 0}}>
-                <div className="flex flex-col gap-1 px-2 py-1">
-                  {diagExpanded && diagData.map((entry) => {
-                    const hasError = entry.checks.some((c) => c.type === "error");
-                    return (
-                      <div key={entry.sem} className={`rounded px-2 py-1.5 text-xs ${
-                        hasError
-                          ? isDark ? "bg-red-500/10" : "bg-red-50"
-                          : isDark ? "bg-yellow-500/10" : "bg-yellow-50"
-                      }`}>
-                        <div className={`flex items-center gap-1 font-medium ${
-                          hasError ? (isDark ? "text-red-300" : "text-red-600") : (isDark ? "text-yellow-300" : "text-yellow-700")
-                        }`}>
-                          {hasError ? "✕" : "⚠"} {locale === "zh" ? abbreviateSemester(entry.sem) : tSemester(entry.sem)}
-                        </div>
-                        {entry.checks.map((c, i) => (
-                          <div key={i} className={`ml-3 ${
-                            c.type === "error"
-                              ? isDark ? "text-red-200" : "text-red-500"
-                              : isDark ? "text-yellow-200" : "text-yellow-600"
+                <div className="flex-1 overflow-auto p-0" style={{minHeight: 0}}>
+                  <div className={`flex ${diagExpanded ? "flex-row gap-2" : "flex-col"} px-2 py-1`}>
+                    {diagExpanded && diagData.map((entry) => {
+                      const hasError = entry.checks.some((c) => c.type === "error");
+                      const remaining = entry.checks.filter((c) => !dismissedDiag.has(`${entry.sem}_${entry.checks.indexOf(c)}`));
+                      if (remaining.length === 0) return null;
+                      return (
+                        <div key={entry.sem} className={`rounded px-2 py-1.5 text-xs ${
+                          hasError
+                            ? isDark ? "bg-red-500/10" : "bg-red-50"
+                            : isDark ? "bg-yellow-500/10" : "bg-yellow-50"
+                        } ${diagExpanded ? "w-48 shrink-0" : ""}`}>
+                          <div className={`flex items-center gap-1 font-medium ${
+                            hasError ? (isDark ? "text-red-300" : "text-red-600") : (isDark ? "text-yellow-300" : "text-yellow-700")
                           }`}>
-                            • {c.msg}
+                            {hasError ? "✕" : "⚠"} {locale === "zh" ? abbreviateSemester(entry.sem) : tSemester(entry.sem)}
                           </div>
-                        ))}
+                          {remaining.map((c, i) => {
+                            const diagKey = `${entry.sem}_${entry.checks.indexOf(c)}`;
+                            return (
+                              <div key={i} className={`ml-3 flex items-start justify-between gap-1 ${
+                                c.type === "error"
+                                  ? isDark ? "text-red-200" : "text-red-500"
+                                  : isDark ? "text-yellow-200" : "text-yellow-600"
+                              }`}>
+                                <span>• {c.msg}</span>
+                                <button
+                                  onClick={() => {
+                                    const next = new Set(dismissedDiag);
+                                    next.add(diagKey);
+                                    setDismissedDiag(next);
+                                    localStorage.setItem("oc_diag_dismiss", JSON.stringify([...next]));
+                                  }}
+                                  className={`shrink-0 cursor-pointer border-none text-[9px] ${
+                                    isDark ? "text-white/30 hover:text-white/60" : "text-gray-400 hover:text-gray-600"
+                                  }`}
+                                >✕</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                    {!diagExpanded && (
+                      <div className={`text-xs ${textMuted} px-2 py-2 text-left`}>
+                        {(() => {
+                          const pastSems = historySemesters.filter((s) => {
+                            const idx = semesters.indexOf(s);
+                            return idx >= 0 && idx <= currentIdx;
+                          });
+                          const futureSems = historySemesters.filter((s) => {
+                            const idx = semesters.indexOf(s);
+                            return idx > currentIdx;
+                          });
+                          const pastCount = pastSems.reduce((sum, s) => {
+                            const ids = savedHistory[s] ?? [];
+                            return sum + ids.length + (customCourses[s] ?? []).length;
+                          }, 0);
+                          const pastCredits = pastSems.reduce((sum, s) => {
+                            const ids = savedHistory[s] ?? [];
+                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(cid)?.credits ?? 0), 0);
+                            const custCred = (customCourses[s] ?? []).reduce((s2, c) => s2 + c.credits, 0);
+                            return sum + cCred + custCred;
+                          }, 0);
+                          const futureCount = futureSems.reduce((sum, s) => {
+                            const ids = savedHistory[s] ?? [];
+                            return sum + ids.length + (customCourses[s] ?? []).length;
+                          }, 0);
+                          const futureCredits = futureSems.reduce((sum, s) => {
+                            const ids = savedHistory[s] ?? [];
+                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(cid)?.credits ?? 0), 0);
+                            const custCred = (customCourses[s] ?? []).reduce((s2, c) => s2 + c.credits, 0);
+                            return sum + cCred + custCred;
+                          }, 0);
+                          return locale === "zh"
+                            ? `已选${pastCount}门，${pastCredits}学分${futureCount > 0 ? `；预选${futureCount}门，${futureCredits}学分` : ""}`
+                            : `${pastCount} courses, ${pastCredits} cr.${futureCount > 0 ? `; preselected ${futureCount} courses, ${futureCredits} cr.` : ""}`;
+                        })()}
                       </div>
-                    );
-                  })}
-                  {!diagExpanded && (
-                    <div className={`text-xs ${textMuted} px-2 py-2 text-center`}>
-                      {locale === "zh" ? "点击展开查看诊断信息" : "Expand to view diagnostics"}
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </Content>
-            </Island>
-          )}
+              </div>
+            )}
+          </Island>
         </section>
 
         {/* ========== MIDDLE: Staging / Pre-selection (1/5) ========== */}
@@ -817,10 +1229,10 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
             <Header border>
               <span className={`text-sm font-semibold ${textDark}`}>{t("workspace.stagingCourse")}</span>
             </Header>
-            <Content className="flex flex-1 flex-col p-0">
-              {/* Semester selector */}
+            <Content className="flex flex-1 flex-col p-0" style={{minHeight: 0}}>
+              {/* Semester selector (always visible at top) */}
               {availableStagingSemesters.length > 0 && (
-                <div className={`flex items-center gap-1.5 px-3 pt-2 pb-1 text-xs ${textBody}`}>
+                <div className={`flex items-center gap-1.5 px-3 pt-2 pb-1 text-xs shrink-0 ${textBody}`}>
                   <span className="whitespace-nowrap">{t("workspace.stagingSemester")}</span>
                   <Select
                     data={availableStagingSemesters.map((s) => ({
@@ -838,8 +1250,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                 </div>
               )}
 
-              {/* Selected course list */}
-              <div className="flex-1 overflow-auto px-3 py-1">
+              {/* Selected course list (scrollable middle) */}
+              <div className="flex-1 overflow-auto px-3 py-1" style={{minHeight: "4.5rem"}}>
                 {selectedCourses.size === 0 ? (
                   <div className={`flex h-full items-center justify-center text-xs ${textMuted}`}>
                     {t("workspace.stagingEmpty")}
@@ -848,15 +1260,22 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   [...selectedCourses].map((cid) => {
                     const c = courseMap.get(cid);
                     if (!c) return null;
+                    // Check if this course has siblings in same choice sets
+                    const csInfo = courseChoiceSets.get(cid);
                     return (
                       <div
                         key={cid}
                         className={`flex items-center justify-between gap-1 rounded px-1.5 py-1 text-xs ${hoverBg}`}
                       >
-                        <span className="flex-1 min-w-0 truncate" title={tName(cid, c.name)}>
+                        <span className={`flex-1 min-w-0 truncate ${textBody}`} title={tName(cid, c.name)}>
                           {tName(cid, c.name)}
                         </span>
                         <span className={`shrink-0 ${textMuted} mr-1`}>{c.credits}</span>
+                        {csInfo && csInfo.length > 0 && (
+                          <span className={`shrink-0 text-[9px] mr-1 ${isDark ? "text-yellow-400" : "text-yellow-600"}`}>
+                            {csInfo.map((cs) => `${cs.maxSelect}选1`).join(" ")}
+                          </span>
+                        )}
                         <button
                           onClick={() => toggleSelected(cid)}
                           className={`flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded border-none text-[10px] transition-colors ${
@@ -874,7 +1293,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
               {/* Summary + Save button */}
               {selectedCourses.size > 0 && (
-                <div className={`flex flex-col border-t ${borderCls}`}>
+                <div className={`flex flex-col border-t shrink-0 ${borderCls}`}>
                   {stagingSemester && (() => {
                     const limit = getCreditLimit(stagingSemester);
                     const total = calcSemesterCredits(stagingSemester, [...selectedCourses]);
@@ -889,18 +1308,17 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   <div className={`flex items-center justify-between px-3 py-2 text-xs`}>
                     <span className={textMuted}>
                     {locale === "zh"
-                      ? `共${selectedCourses.size}门，${[...selectedCourses].reduce((s, cid) => s + (courseMap.get(cid)?.credits ?? 0), 0)}学分`
-                      : `${selectedCourses.size} courses, ${[...selectedCourses].reduce((s, cid) => s + (courseMap.get(cid)?.credits ?? 0), 0)} cr.`}
+                      ? `共${selectedCourses.size + ((customCourses[stagingSemester] ?? []).length)}门，${calcSemesterCredits(stagingSemester, [...selectedCourses])}学分`
+                      : `${selectedCourses.size} courses, ${calcSemesterCredits(stagingSemester, [...selectedCourses])} cr.`}
                   </span>
                   <Button
                     onClick={() => {
                       if (!stagingSemester) return;
                       const selected = [...selectedCourses];
-                      const errors = validateSelection(selected);
                       const checks = getSemesterChecks(stagingSemester, selected);
                       const hasErrors = checks.some((c) => c.type === "error");
-                      if (errors.length > 0 || hasErrors) {
-                        setValidationErrors(errors.length > 0 ? errors : checks.map((c) => c.msg));
+                      if (hasErrors) {
+                        setValidationErrors(checks.map((c) => c.msg));
                         return;
                       }
                       const next = {...savedHistory, [stagingSemester]: selected};
@@ -923,15 +1341,50 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
               {/* Force-save button when validation errors exist */}
               {validationErrors && validationErrors.length > 0 && (
-                <div className={`border-t px-3 py-2 ${borderCls}`}>
+                <div className={`border-t shrink-0 px-3 py-2 ${borderCls}`}>
+                  <div className={`mb-2 rounded px-2 py-1.5 text-[10px] space-y-0.5 ${
+                    isDark ? "bg-red-500/15" : "bg-red-50"
+                  }`}>
+                    {(() => {
+                      const checks = stagingSemester ? getSemesterChecks(stagingSemester, [...selectedCourses]) : [];
+                      const errorMsgs = checks.filter((c) => c.type === "error").map((c) => c.msg);
+                      const warningMsgs = checks.filter((c) => c.type === "warning").map((c) => c.msg);
+                      return (
+                        <>
+                          {errorMsgs.map((err, i) => (
+                            <div key={i} className={isDark ? "text-red-200" : "text-red-500"}>• {err}</div>
+                          ))}
+                          {warningMsgs.map((warn, i) => (
+                            <div key={`w${i}`} className={isDark ? "text-yellow-200" : "text-yellow-600"}>• {warn}</div>
+                          ))}
+                        </>
+                      );
+                    })()}
+                  </div>
                   <Button
                     onClick={() => setShowForceConfirm(true)}
                   >{t("workspace.saveAnyway")}</Button>
                 </div>
               )}
 
-              {/* ===== Custom Courses ===== */}
-              <div className={`border-t ${borderCls}`}>
+              {/* ===== Credit Limit Info ===== */}
+              {stagingSemester && selectedCourses.size > 0 && (() => {
+                const limit = getCreditLimit(stagingSemester);
+                if (!limit) return null;
+                const total = calcSemesterCredits(stagingSemester, [...selectedCourses]);
+                return (
+                  <div className={`border-t shrink-0 px-3 py-1 text-[10px] ${borderCls} ${textMuted}`}>
+                    {locale === "zh"
+                      ? `当前学分：${total}，上限：${limit.max}${limit.min > 0 ? `，下限：${limit.min}` : ""}`
+                      : `Credits: ${total}, max: ${limit.max}${limit.min > 0 ? `, min: ${limit.min}` : ""}`}
+                  </div>
+                );
+              })()}
+
+              </Content>
+
+              {/* ===== Custom Courses — outside Content, pinned to Island bottom ===== */}
+              <div className={`border-t shrink-0 ${borderCls}`}>
                 <div className={`px-3 pt-2 pb-1 text-xs font-medium ${textDark}`}>
                   {t("workspace.customCourse")}
                 </div>
@@ -984,22 +1437,6 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   )}
                 </div>
               </div>
-
-              {/* ===== Credit Limit Info ===== */}
-              {stagingSemester && (() => {
-                const limit = getCreditLimit(stagingSemester);
-                if (!limit) return null;
-                const total = calcSemesterCredits(stagingSemester, [...selectedCourses]);
-                return (
-                  <div className={`border-t px-3 py-1 text-[10px] ${borderCls} ${textMuted}`}>
-                    {locale === "zh"
-                      ? `当前学分：${total}，上限：${limit.max}${limit.min > 0 ? `，下限：${limit.min}` : ""}`
-                      : `Credits: ${total}, max: ${limit.max}${limit.min > 0 ? `, min: ${limit.min}` : ""}`}
-                  </div>
-                );
-              })()}
-
-              </Content>
             </Island>
           </section>
 
@@ -1011,13 +1448,21 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                    onClick={(e) => e.stopPropagation()}>
                 <div className={`text-sm font-semibold mb-2 ${textDark}`}>{t("workspace.saveForceTitle")}</div>
                 <div className={`text-xs mb-3 ${textBody}`}>{t("workspace.saveForceConfirm")}</div>
-                {validationErrors && (
-                  <div className={`mb-3 rounded px-2 py-1.5 text-[10px] ${isDark ? "bg-red-500/15" : "bg-red-50"}`}>
-                    {validationErrors.map((err, i) => (
-                      <div key={i} className={isDark ? "text-red-200" : "text-red-500"}>• {err}</div>
-                    ))}
-                  </div>
-                )}
+                {stagingSemester && (() => {
+                  const checks = getSemesterChecks(stagingSemester, [...selectedCourses]);
+                  const errorMsgs = checks.filter((c) => c.type === "error").map((c) => c.msg);
+                  const warningMsgs = checks.filter((c) => c.type === "warning").map((c) => c.msg);
+                  return (
+                    <div className={`mb-3 rounded px-2 py-1.5 text-[10px] space-y-0.5 ${isDark ? "bg-red-500/15" : "bg-red-50"}`}>
+                      {errorMsgs.map((err, i) => (
+                        <div key={i} className={isDark ? "text-red-200" : "text-red-500"}>• {err}</div>
+                      ))}
+                      {warningMsgs.map((warn, i) => (
+                        <div key={`w${i}`} className={isDark ? "text-yellow-200" : "text-yellow-600"}>• {warn}</div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 <div className="flex gap-2 justify-end">
                   <Button onClick={() => setShowForceConfirm(false)}>{t("workspace.historyDeleteCancel")}</Button>
                   <Button onClick={() => {
@@ -1043,15 +1488,78 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
             </div>
           )}
 
+          {/* ===== Choice conflict modal ===== */}
+          {choiceConflict && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{background: "rgba(0,0,0,0.4)"}}>
+              <div className={`w-72 rounded-xl shadow-2xl border p-4 ${isDark ? "bg-[#1e1e2a] border-white/10" : "bg-white border-gray-200"}`}>
+                <div className={`text-sm font-semibold mb-2 ${textDark}`}>
+                  {locale === "zh" ? "选课冲突" : "Course Conflict"}
+                </div>
+                <div className={`text-xs mb-3 ${textBody}`}>
+                  {locale === "zh"
+                    ? `「${choiceConflict.courseName}」与「${choiceConflict.conflictName}」属于「${choiceConflict.setName}」，只需选择一门。`
+                    : `"${choiceConflict.courseName}" and "${choiceConflict.conflictName}" are in "${choiceConflict.setName}". Only one is needed.`}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button onClick={() => setChoiceConflict(null)}>
+                    {locale === "zh" ? "取消选择" : "Cancel"}
+                  </Button>
+                  <Button onClick={() => {
+                    setChoiceConflict(null);
+                    setSelectedCourses((prev) => {
+                      const next = new Set(prev);
+                      next.add(choiceConflict.courseId);
+                      return next;
+                    });
+                  }}>
+                    {locale === "zh" ? "仍然选择" : "Select Anyway"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ===== Clear All confirmation modal ===== */}
+          {clearConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{background: "rgba(0,0,0,0.4)"}}
+                 onClick={() => setClearConfirm(false)}>
+              <div className={`w-72 rounded-xl shadow-2xl border p-4 ${isDark ? "bg-[#1e1e2a] border-white/10" : "bg-white border-gray-200"}`}
+                   onClick={(e) => e.stopPropagation()}>
+                <div className={`text-sm font-semibold mb-2 ${textDark}`}>
+                  {locale === "zh" ? "确定清除全部选课记录吗？" : "Clear all course records?"}
+                </div>
+                <div className={`text-xs mb-3 ${textBody}`}>
+                  {locale === "zh"
+                    ? "此操作将清除所有学期的选课记录和自定义课程数据。此操作不可撤销。"
+                    : "This will clear all course records and custom course data across all semesters. This action cannot be undone."}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button onClick={() => setClearConfirm(false)}>
+                    {locale === "zh" ? "取消" : "Cancel"}
+                  </Button>
+                  <Button onClick={() => {
+                    persistHistory({});
+                    persistCustom({});
+                    setClearConfirm(false);
+                  }}>
+                    {locale === "zh" ? "确定清除" : "Clear All"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ===== Import/Export modal ===== */}
           {showImportModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center" style={{background: "rgba(0,0,0,0.4)"}}
                  onClick={() => { setShowImportModal(false); setImportPreview(null); }}>
               <div className={`w-80 rounded-xl shadow-2xl border p-4 ${isDark ? "bg-[#1e1e2a] border-white/10" : "bg-white border-gray-200"}`}
                    onClick={(e) => e.stopPropagation()}>
-                <div className={`text-sm font-semibold mb-3 ${textDark}`}>{t("workspace.importExport")}</div>
+                <div className={`text-sm font-semibold mb-3 ${textDark}`}>{t("workspace.importTitle")}</div>
+                <div className={`text-[10px] mb-2 ${textBody}`}>
+                  {locale === "zh" ? "请选择本地 JSON 文件导入历史记录。" : "Select a local JSON file to import history records."}
+                </div>
                 <div className="flex gap-2 mb-3">
-                  <Button onClick={handleExport}>{t("workspace.exportBtn")}</Button>
                   <Button onClick={() => fileInputRef.current?.click()}>{t("workspace.importBtn")}</Button>
                   <input
                     ref={fileInputRef}
@@ -1064,8 +1572,15 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                     }}
                   />
                 </div>
+                <div className={`text-[10px] mb-2 font-medium ${textDark}`}>
+                  {locale === "zh" ? "云端导入" : "Cloud Import"}
+                </div>
+                <div className={`text-[10px] mb-2 ${textBody}`}>
+                  {locale === "zh" ? "云端导入功能正在开发中，敬请期待。" : "Cloud import is under development. Coming soon."}
+                </div>
+                <Button disabled>{locale === "zh" ? "云端导入（未启用）" : "Cloud Import (disabled)"}</Button>
                 {importPreview && (
-                  <div className={`rounded px-2 py-1.5 text-[10px] ${isDark ? "bg-white/5 text-white/70" : "bg-gray-50 text-gray-600"}`}>
+                  <div className={`mt-2 rounded px-2 py-1.5 text-[10px] ${isDark ? "bg-white/5 text-white/70" : "bg-gray-50 text-gray-600"}`}>
                     <pre className="whitespace-pre-wrap">{importPreview}</pre>
                   </div>
                 )}
@@ -1085,21 +1600,130 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
               className="overflow-visible border-b shrink-0"
               style={{position: "relative", zIndex: 2}}
             >
-              <div className="px-3 pt-2 pb-1">
-                <Input
-                  label={t("workspace.searchPlaceholder")}
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.currentTarget.value)}
-                  onClear={() => setSearchText("")}
-                  theme={inputTheme}
-                />
+              {/* Search row: 2-column grid aligning with filters below */}
+              <div className="grid grid-cols-2 gap-x-4 px-3 pt-2 pb-1">
+                {/* Col 1: Search input */}
+                <div className="flex flex-col gap-0.5">
+                  <Input
+                    label={t("workspace.searchPlaceholder")}
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.currentTarget.value)}
+                    onClear={() => setSearchText("")}
+                    theme={inputTheme}
+                  />
+                </div>
+                {/* Col 2: Recommend toggle + ? + hint */}
+                <div className={`flex flex-col gap-0.5 min-w-0 justify-end`}>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setRecommendEnabled(!recommendEnabled)}
+                      className={`shrink-0 cursor-pointer rounded border px-1.5 py-1 text-[9px] font-medium leading-none transition-colors ${
+                        recommendEnabled
+                          ? isDark
+                            ? "bg-blue-500/20 border-blue-500/30 text-blue-300"
+                            : "bg-blue-500/10 border-blue-500/30 text-blue-600"
+                          : isDark
+                            ? "bg-white/5 border-white/10 text-white/50"
+                            : "bg-gray-50 border-gray-200 text-gray-400"
+                      }`}
+                      title={locale === "zh" ? "智能推荐开关" : "Recommendation toggle"}
+                    >
+                      {locale === "zh" ? `推荐${recommendEnabled ? "ON" : "OFF"}` : `Rec.${recommendEnabled ? "ON" : "OFF"}`}
+                    </button>
+                    {/* Info tooltip — z-[9999] to float above everything */}
+                    <div className="relative group shrink-0">
+                      <span className={`inline-flex h-4 w-4 cursor-default items-center justify-center rounded-full text-[9px] font-bold leading-none ${
+                        isDark ? "bg-white/10 text-white/50" : "bg-gray-200 text-gray-500"
+                      }`}>?</span>
+                      <div className={`absolute left-1/2 -translate-x-1/2 top-full z-[9999] mt-1 w-64 rounded-lg border px-3 py-2 text-[10px] leading-relaxed shadow-lg pointer-events-none opacity-0 group-hover:opacity-100 ${
+                        isDark ? "bg-[#2a2a3a] border-white/15 text-white/80" : "bg-white border-gray-200 text-gray-700"
+                      }`}>
+                        {locale === "zh"
+                          ? "这是课程智能推荐算法开关。开关为ON状态时，系统将依据个人选课历史与当前选课状态，在列表内智能推送课程。开启筛选功能后，推荐功能自动停用；清空筛选条件即可恢复使用。点击开关即转为OFF状态，可停用该推荐服务。"
+                          : "This is the smart recommendation toggle. When ON, the system intelligently sorts courses based on your selection history and current state. Filtering auto-disables recommendations; clearing filters restores them. Toggle OFF to disable."}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Blue hint below the button */}
+                  {recommendEnabled && !hasActiveFilters && stagingSemester && (() => {
+                    const lines: string[] = [];
+                    let idx = 0;
+
+                    // ① Special course prompts
+                    const peCourseIdsLocal = new Set(PE_BY_SEMESTER[stagingSemester] ?? []);
+                    const isSummerLocal = stagingSemester.includes("开学前") || stagingSemester.includes("夏季");
+                    if (!isSummerLocal && peCourseIdsLocal.size > 0 && ![...selectedCourses].some((id) => peCourseIdsLocal.has(id))) {
+                      const peName = [...peCourseIdsLocal].map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
+                      idx++;
+                      lines.push(`${idx}.${locale === "zh" ? `须选择${peName}` : `Need ${peName}`}`);
+                    }
+                    const stagingCids = stagingSemester ? (semesterMap.get(stagingSemester) ?? []).map((c) => c.course_id) : [];
+                    const shuyuanInStaging = stagingCids.filter((cid) => {
+                      const infos = courseGroupInfo.get(cid) ?? [];
+                      return infos.some((i) => i.groupCode === "SHUYUAN_GE");
+                    });
+                    if (shuyuanInStaging.length > 0 && !shuyuanInStaging.some((id) => selectedCourses.has(id))) {
+                      const syName = shuyuanInStaging.map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
+                      idx++;
+                      lines.push(`${idx}.${locale === "zh" ? `须选择${syName}` : `Need ${syName}`}`);
+                    }
+                    const shijianInStaging = stagingCids.filter((cid) => {
+                      const infos = courseGroupInfo.get(cid) ?? [];
+                      return infos.some((i) => i.groupCode === "SHIJIAN");
+                    });
+                    if (shijianInStaging.length > 0 && !shijianInStaging.some((id) => selectedCourses.has(id))) {
+                      const sjName = shijianInStaging.map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
+                      idx++;
+                      lines.push(`${idx}.${locale === "zh" ? `须选择${sjName}` : `Need ${sjName}`}`);
+                    }
+
+                    // ② Foundation direction hints
+                    const foundationLabels: Record<string, string> = {
+                      COMP_BASIS: locale === "zh" ? "II类" : "Type II",
+                      OR_STAT: locale === "zh" ? "III类" : "Type III",
+                      MECH_BASIS: locale === "zh" ? "I类" : "Type I",
+                    };
+                    const activeDirs = [...foundationActive.keys()].map((k) => foundationLabels[k] ?? k);
+                    if (activeDirs.length > 0) {
+                      idx++;
+                      const dirStr = activeDirs.join(locale === "zh" ? "、" : ", ");
+                      lines.push(`${idx}.${locale === "zh" ? `推荐${dirStr}` : `Recommended: ${dirStr}`}`);
+                    }
+
+                    // ③ Module score hints: top 2 (ties all shown)
+                    const sortedMods = [...moduleScoreMap.entries()].sort((a, b) => b[1] - a[1]);
+                    if (sortedMods.length > 0) {
+                      const topScore = sortedMods[0][1];
+                      const topTier = sortedMods.filter(([, s]) => s === topScore);
+                      let shownMods = [...topTier];
+                      if (shownMods.length < 2 && sortedMods.length > topTier.length) {
+                        const secondScore = sortedMods[topTier.length][1];
+                        const secondTier = sortedMods.filter(([, s]) => s === secondScore);
+                        shownMods = [...shownMods, ...secondTier];
+                      }
+                      if (shownMods.length > 0) {
+                        idx++;
+                        const modStr = shownMods.map(([id]) => `模块${id}`).join("、");
+                        lines.push(`${idx}.${locale === "zh" ? `推荐${modStr}` : `Recommended: ${modStr}`}`);
+                      }
+                    }
+
+                    const hint = lines.join(" ");
+                    if (!hint) return null;
+                    return (
+                      <div className={`mt-0.5 text-[9px] leading-tight ${isDark ? "text-blue-300" : "text-blue-500"}`}>
+                        {hint}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
 
               <div className={`px-3 pt-1 pb-1 text-xs font-medium ${textMuted}`}>
                 {t("workspace.filterHeader")}
               </div>
 
-              {/* 2-column grid so AB aligns with "按推荐学期" column */}
+              {/* 2-column grid for filter dropdowns */}
               <div className="grid grid-cols-2 gap-x-4 px-3 pb-1">
                 {/* Col 1, Row 1: 按课程组 */}
                 <div className="flex flex-col gap-0.5">
@@ -1300,6 +1924,20 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                               : "—"}
                           </span>
                         </div>
+                        {/* Multi-select relationship */}
+                        {(courseChoiceSets.get(dc.course_id) ?? []).length > 0 && (
+                          <div className="flex flex-col gap-0.5">
+                            <span className={textMuted}>
+                              {locale === "zh" ? "多选一关系" : "Mutual Exclusion"}
+                            </span>
+                            {(courseChoiceSets.get(dc.course_id) ?? []).map((cs) => (
+                              <div key={cs.setId} className={`text-xs pl-2 ${isDark ? "text-yellow-300" : "text-yellow-700"}`}>
+                                <span className="font-medium">{cs.setName}（{cs.maxSelect}选1）：</span>
+                                <span>{cs.siblings.map((s) => tName(s.courseId, s.name)).join("、")}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div className="flex justify-between">
                           <span className={textMuted}>
                             {locale === "zh" ? "先修课程" : "Prerequisites"}
