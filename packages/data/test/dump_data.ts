@@ -1,10 +1,10 @@
-import {fetchCourseData} from "../src/course";
-import {fetchDegreeData} from "../src/degree_track";
-import {fetchTeachingPlanData} from "../src/teach_plan";
 import type {
     Course, Group, ChoiceSet,
     CourseCoursePrereq, CourseChoiceSetPrereq,
-} from "../src/model";
+} from "@our-courses/data/model";
+import {fetchCourseData,} from "@our-courses/data/course";
+import {fetchDegreeData} from "@our-courses/data/degree_track";
+import {fetchTeachingPlanData} from "@our-courses/data/teach_plan";
 
 const COL_WIDTHS = {id: 35, name: 50, credits: 8, type: 8};
 
