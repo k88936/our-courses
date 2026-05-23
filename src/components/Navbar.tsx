@@ -8,7 +8,7 @@ import {useTName} from "../hooks/useCurriculumData";
 import singleLogo from "../assets/OfCourses_singleLogo.ico";
 import duShi from "../assets/DuShi.png";
 
-export type NavPage = "home" | "curriculum" | "workspace" | "about";
+export type NavPage = "home" | "curriculum" | "workspace" | "tools" | "about";
 
 interface NavbarProps {
     currentPage: NavPage;
@@ -19,6 +19,7 @@ const navLinks: {page: NavPage; labelKey: string}[] = [
     {page: "home", labelKey: "nav.home"},
     {page: "curriculum", labelKey: "nav.curriculum"},
     {page: "workspace", labelKey: "nav.workspace"},
+    {page: "tools", labelKey: "nav.tools"},
     {page: "about", labelKey: "nav.about"},
 ];
 

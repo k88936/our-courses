@@ -7,6 +7,7 @@ import {Navbar, type NavPage} from "./components/Navbar";
 import {HomePage} from "./pages/HomePage";
 import {Workspace} from "./pages/Workspace";
 import {CurriculumPage} from "./pages/CurriculumPage";
+import {ToolsPage} from "./pages/ToolsPage";
 import {AboutPage} from "./pages/AboutPage";
 
 const AppShell = () => {
@@ -34,6 +35,13 @@ const AppShell = () => {
                     <div className={`flex h-full flex-col transition-colors duration-300 ${isDark ? "bg-[#0e0e14]" : "bg-gray-50"}`}>
                         {renderNavbar()}
                         <AboutPage />
+                    </div>
+                );
+            case "tools":
+                return (
+                    <div className={`flex h-full flex-col transition-colors duration-300 ${isDark ? "bg-[#0e0e14]" : "bg-gray-50"}`}>
+                        {renderNavbar()}
+                        <ToolsPage />
                     </div>
                 );
         }

@@ -157,6 +157,18 @@ export const HomePage = ({onNavigate}: HomePageProps) => {
                         {t("nav.workspace")}
                     </button>
 
+                    {/* Tools 按钮 */}
+                    <button
+                        onClick={() => onNavigate("tools")}
+                        className={`cursor-pointer rounded-xl border px-8 py-3 text-sm font-semibold transition-all duration-300 hover:scale-105 ${
+                            isDark
+                                ? "border-white/15 bg-white/5 text-white/80 backdrop-blur-sm hover:border-white/30 hover:bg-white/10 hover:text-white"
+                                : "border-[rgba(0,0,0,0.1)] bg-transparent text-gray-500 hover:border-[rgba(0,0,0,0.2)] hover:bg-[rgba(0,0,0,0.03)] hover:text-gray-700"
+                        }`}
+                    >
+                        {t("nav.tools")}
+                    </button>
+
                     {/* About 按钮 */}
                     <button
                         onClick={() => onNavigate("about")}
