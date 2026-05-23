@@ -149,15 +149,25 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     return available;
   }, [savedHistory, semesters, currentIdx]);
 
+  // Also include editing semesters (those with saved data) as valid staging options
+  const editingSemesters = useMemo(() => {
+    if (stagingSemester && savedHistory[stagingSemester] && !availableStagingSemesters.includes(stagingSemester)) {
+      return [stagingSemester];
+    }
+    return [];
+  }, [stagingSemester, savedHistory, availableStagingSemesters]);
+
+  const allStagingOptions = useMemo(() => [...availableStagingSemesters, ...editingSemesters], [availableStagingSemesters, editingSemesters]);
+
   useEffect(() => {
     if (!stagingSemester && availableStagingSemesters.length > 0) {
       setStagingSemester(availableStagingSemesters[0]);
     }
-    // If current staging semester is no longer available, reset
-    if (stagingSemester && availableStagingSemesters.length > 0 && !availableStagingSemesters.includes(stagingSemester)) {
+    // If current staging semester is no longer available and not editing, reset
+    if (stagingSemester && allStagingOptions.length > 0 && !allStagingOptions.includes(stagingSemester)) {
       setStagingSemester(availableStagingSemesters[0]);
     }
-  }, [availableStagingSemesters, stagingSemester]);
+  }, [availableStagingSemesters, stagingSemester, allStagingOptions]);
 
   const persistHistory = (next: Record<string, string[]>) => {
     setSavedHistory(next);
@@ -358,6 +368,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   // Build diagnostic data for all semesters + current staging
   const diagData = useMemo(() => {
     const entries: Array<{sem: string; checks: Array<{type: "error" | "warning"; msg: string}>}> = [];
+    const choiceConflictEntries: Array<{type: "error" | "warning"; msg: string}> = [];
     const allSems = [...historySemesters, ...availableStagingSemesters];
     const seen = new Set<string>();
     for (const sem of allSems) {
@@ -365,14 +376,26 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       seen.add(sem);
       const saved = savedHistory[sem] ?? [];
       const checks = getSemesterChecks(sem, saved);
-      if (checks.length > 0) entries.push({sem, checks});
+      // Separate choice set conflicts from other checks
+      const conflicts = checks.filter((c) => c.msg.includes("最多选") || c.msg.includes("max"));
+      const others = checks.filter((c) => !(c.msg.includes("最多选") || c.msg.includes("max")));
+      if (others.length > 0) entries.push({sem, checks: others});
+      // Deduplicate choice conflicts by message
+      for (const conflict of conflicts) {
+        if (!choiceConflictEntries.some((existing) => existing.msg === conflict.msg)) {
+          choiceConflictEntries.push(conflict);
+        }
+      }
     }
     // Also include current staging selection (if different from saved)
     if (stagingSemester && selectedCourses.size > 0 && !seen.has(stagingSemester)) {
       const checks = getSemesterChecks(stagingSemester, [...selectedCourses]);
-      if (checks.length > 0) entries.push({sem: stagingSemester, checks});
+      const conflicts = checks.filter((c) => c.msg.includes("最多选") || c.msg.includes("max"));
+      const others = checks.filter((c) => !(c.msg.includes("最多选") || c.msg.includes("max")));
+      if (others.length > 0) entries.push({sem: stagingSemester, checks: others});
+      choiceConflictEntries.push(...conflicts);
     }
-    return entries;
+    return {entries, choiceConflicts: choiceConflictEntries};
   }, [historySemesters, availableStagingSemesters, savedHistory, customCourses, stagingSemester, selectedCourses]);
 
   // --- Import / Export ---
@@ -1114,19 +1137,20 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
             </Content>
 
             {/* Diagnostics inside history Island */}
-            {diagData.length > 0 && (
+            {diagData.entries.length > 0 || diagData.choiceConflicts.length > 0 ? (
               <div className={`border-t shrink-0 flex flex-col ${borderCls}`} style={{flex: diagExpanded ? "0.33" : "0 0 auto", minHeight: 0}}>
                 <div className={`flex items-center gap-2 px-3 py-1.5 text-xs ${bgHeader}`}>
                   <span className={`font-semibold ${textDark}`}>
                     {locale === "zh" ? "诊断" : "Diagnostics"}
                   </span>
                   {(() => {
-                    const totalErrors = diagData.reduce((s, e) => s + e.checks.filter((c) => c.type === "error" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
-                    const totalWarnings = diagData.reduce((s, e) => s + e.checks.filter((c) => c.type === "warning" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
+                    const totalErrors = diagData.entries.reduce((s, e) => s + e.checks.filter((c) => c.type === "error" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
+                    const totalWarnings = diagData.entries.reduce((s, e) => s + e.checks.filter((c) => c.type === "warning" && !dismissedDiag.has(`${e.sem}_${e.checks.indexOf(c)}`)).length, 0);
+                    const totalChoiceWarnings = diagData.choiceConflicts.filter((_, i) => !dismissedDiag.has(`choice_${i}`)).length;
                     return (
                       <span className={`text-[10px] ${textMuted}`}>
                         {totalErrors > 0 && <span className="text-red-400">❌({totalErrors})</span>}
-                        {totalWarnings > 0 && <span className="text-yellow-400 ml-1">⚠({totalWarnings})</span>}
+                        {(totalWarnings + totalChoiceWarnings) > 0 && <span className="text-yellow-400 ml-1">⚠({totalWarnings + totalChoiceWarnings})</span>}
                       </span>
                     );
                   })()}
@@ -1138,7 +1162,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                 </div>
                 <div className="flex-1 overflow-auto p-0" style={{minHeight: 0}}>
                   <div className={`flex ${diagExpanded ? "flex-row gap-2" : "flex-col"} px-2 py-1`}>
-                    {diagExpanded && diagData.map((entry) => {
+                    {/* Semester-specific entries */}
+                    {diagExpanded && diagData.entries.map((entry) => {
                       const hasError = entry.checks.some((c) => c.type === "error");
                       const remaining = entry.checks.filter((c) => !dismissedDiag.has(`${entry.sem}_${entry.checks.indexOf(c)}`));
                       if (remaining.length === 0) return null;
@@ -1179,6 +1204,33 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                         </div>
                       );
                     })}
+                    {/* Choice conflict box — separate from semester entries */}
+                    {diagExpanded && diagData.choiceConflicts.length > 0 && (
+                      <div className={`rounded px-2 py-1.5 text-xs ${isDark ? "bg-orange-500/10" : "bg-orange-50"} ${diagExpanded ? "w-48 shrink-0" : ""}`}>
+                        <div className={`flex items-center gap-1 font-medium ${isDark ? "text-orange-300" : "text-orange-700"}`}>
+                          ⚠ {locale === "zh" ? "多选一冲突" : "Mutual Exclusion"}
+                        </div>
+                        {diagData.choiceConflicts.map((c, i) => {
+                          const diagKey = `choice_${i}`;
+                          return (
+                            <div key={i} className={`ml-3 flex items-start justify-between gap-1 ${isDark ? "text-yellow-200" : "text-yellow-600"}`}>
+                              <span>• {c.msg}</span>
+                              <button
+                                onClick={() => {
+                                  const next = new Set(dismissedDiag);
+                                  next.add(diagKey);
+                                  setDismissedDiag(next);
+                                  localStorage.setItem("oc_diag_dismiss", JSON.stringify([...next]));
+                                }}
+                                className={`shrink-0 cursor-pointer border-none text-[9px] ${
+                                  isDark ? "text-white/30 hover:text-white/60" : "text-gray-400 hover:text-gray-600"
+                                }`}
+                              >✕</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     {!diagExpanded && (
                       <div className={`text-xs ${textMuted} px-2 py-2 text-left`}>
                         {(() => {
@@ -1219,7 +1271,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   </div>
                 </div>
               </div>
-            )}
+            ) : null}
           </Island>
         </section>
 
@@ -1231,11 +1283,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
             </Header>
             <Content className="flex flex-1 flex-col p-0" style={{minHeight: 0}}>
               {/* Semester selector (always visible at top) */}
-              {availableStagingSemesters.length > 0 && (
+              {allStagingOptions.length > 0 && (
                 <div className={`flex items-center gap-1.5 px-3 pt-2 pb-1 text-xs shrink-0 ${textBody}`}>
                   <span className="whitespace-nowrap">{t("workspace.stagingSemester")}</span>
                   <Select
-                    data={availableStagingSemesters.map((s) => ({
+                    data={allStagingOptions.map((s) => ({
                       key: s,
                       label: locale === "zh" ? abbreviateSemester(s) : tSemester(s),
                     }))}
@@ -1297,11 +1349,15 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   {stagingSemester && (() => {
                     const limit = getCreditLimit(stagingSemester);
                     const total = calcSemesterCredits(stagingSemester, [...selectedCourses]);
+                    const customList = customCourses[stagingSemester] ?? [];
+                    const customCount = customList.length;
+                    const customCreditsCount = customList.reduce((s, c) => s + c.credits, 0);
                     return limit ? (
-                      <div className={`flex items-center gap-2 px-3 pt-1.5 pb-0.5 text-[10px] ${textMuted}`}>
-                        <span>{total}/{limit.max} {t("workspace.colCredits")}</span>
-                        {total > limit.max && <span className="text-red-400">⚠</span>}
-                        {limit.min > 0 && <span className="ml-1">{t("workspace.creditMin")}</span>}
+                      <div className={`flex flex-col px-3 pt-1.5 pb-0.5 text-[10px] ${textMuted}`}>
+                        <span>{total}/{limit.max} 学分{limit.min > 0 && ` 每学期至少6学分（军训/暑期除外）`}</span>
+                        {customCount > 0 && (
+                          <span>已添加{customCount}门自定义课程，占{customCreditsCount}学分</span>
+                        )}
                       </div>
                     ) : null;
                   })()}
@@ -1367,23 +1423,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                 </div>
               )}
 
-              {/* ===== Credit Limit Info ===== */}
-              {stagingSemester && selectedCourses.size > 0 && (() => {
-                const limit = getCreditLimit(stagingSemester);
-                if (!limit) return null;
-                const total = calcSemesterCredits(stagingSemester, [...selectedCourses]);
-                return (
-                  <div className={`border-t shrink-0 px-3 py-1 text-[10px] ${borderCls} ${textMuted}`}>
-                    {locale === "zh"
-                      ? `当前学分：${total}，上限：${limit.max}${limit.min > 0 ? `，下限：${limit.min}` : ""}`
-                      : `Credits: ${total}, max: ${limit.max}${limit.min > 0 ? `, min: ${limit.min}` : ""}`}
-                  </div>
-                );
-              })()}
-
-              </Content>
-
-              {/* ===== Custom Courses — outside Content, pinned to Island bottom ===== */}
+              {/* Custom Courses - pinned at bottom by flex-1 above */}
               <div className={`border-t shrink-0 ${borderCls}`}>
                 <div className={`px-3 pt-2 pb-1 text-xs font-medium ${textDark}`}>
                   {t("workspace.customCourse")}
@@ -1391,28 +1431,33 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                 <div className="px-3 pb-1">
                   <div className="flex items-center gap-1 mb-1">
                     <input
+                      className={`w-24 min-w-0 rounded border px-1.5 py-0.5 text-xs outline-none ${
+                        isDark ? "bg-white/5 border-white/10 text-white/80" : "bg-gray-50 border-gray-200 text-gray-800"
+                      }`}
+                      placeholder={t("workspace.customCourseName")}
                       value={customName}
                       onChange={(e) => setCustomName(e.target.value)}
-                      placeholder={t("workspace.customCourseName")}
-                      className={`flex-1 min-w-0 rounded border px-1.5 py-1 text-xs outline-none ${
-                        isDark ? "bg-white/5 border-white/10 text-white/90" : "bg-white border-gray-300 text-gray-800"
-                      }`}
                     />
                     <input
+                      className="w-16 rounded border px-1.5 py-0.5 text-xs outline-none"
+                      style={
+                        isDark
+                          ? {background: "rgba(255,255,255,0.05)", borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.8)"}
+                          : {background: "#f9fafb", borderColor: "#e5e7eb", color: "#374151"}
+                      }
+                      placeholder={t("workspace.customCourseCredits")}
                       value={customCredits}
                       onChange={(e) => setCustomCredits(e.target.value)}
-                      placeholder={t("workspace.customCourseCredits")}
-                      className={`w-14 rounded border px-1.5 py-1 text-xs outline-none ${
-                        isDark ? "bg-white/5 border-white/10 text-white/90" : "bg-white border-gray-300 text-gray-800"
-                      }`}
                       type="number"
                       min="0"
                       step="0.5"
                     />
                     <button
                       onClick={addCustomCourse}
-                      className={`cursor-pointer rounded border-none px-2 py-1 text-xs font-medium ${
-                        isDark ? "bg-blue-500/20 text-blue-300 hover:bg-blue-500/30" : "bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
+                      className={`cursor-pointer rounded border-none px-2 py-[3px] text-xs font-medium transition-colors shrink-0 ${
+                        isDark
+                          ? "bg-blue-500/20 text-blue-300 hover:bg-blue-500/30"
+                          : "bg-blue-500/10 text-blue-600 hover:bg-blue-500/20"
                       }`}
                     >{t("workspace.customCourseAdd")}</button>
                   </div>
@@ -1437,6 +1482,9 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   )}
                 </div>
               </div>
+
+              </Content>
+
             </Island>
           </section>
 
