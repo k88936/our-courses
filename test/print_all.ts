@@ -30,6 +30,11 @@ type CoursePrereqChoiceSet = Database["public"]["Tables"]["course_prereq_choice_
         choice_set_courses: (ChoiceSetCourse & { courses: Course | null })[];
     }) | null;
 };
+type Semester = Database["public"]["Tables"]["semesters"]["Row"];
+type CourseRecommendedSemester = Database["public"]["Tables"]["course_recommended_semesters"]["Row"] & {
+    courses: Course | null;
+    semesters: Semester | null;
+};
 
 const COL_WIDTHS = {id: 35, name: 50, credits: 8, type: 8};
 
@@ -65,6 +70,20 @@ function printLine(
 
 function printTableHeader() {
     printLine("课程编号", "课程名称", "学分", "类别", "备注");
+}
+
+const REC_COL_WIDTHS = {courseId: 35, name: 50, semester: 30};
+
+function printRecLine(courseId: string, name: string, semester: string) {
+    console.log(
+        pad(courseId, REC_COL_WIDTHS.courseId) +
+        pad(name, REC_COL_WIDTHS.name) +
+        semester,
+    );
+}
+
+function printRecHeader() {
+    printRecLine("课程编号", "课程名称", "推荐学期");
 }
 
 function printChoiceSetRow(
@@ -340,6 +359,29 @@ async function print_all() {
     }
 
     printDegreeTracks(tracks, groupReqs, courseReqs, choiceReqs);
+
+    const [recommendedSemesters] = await Promise.all([
+        supabase.from("course_recommended_semesters")
+            .select("*, courses(*), semesters(*)")
+            .order("id"),
+    ]);
+
+    const recData = (recommendedSemesters.data ?? []) as CourseRecommendedSemester[];
+
+    if (recData.length > 0) {
+        console.log(`\n教学计划`);
+        console.log("");
+        printRecHeader();
+        for (const r of recData) {
+            const sem = r.semesters;
+            const semLabel = sem ? `${sem.season} ${sem.year_rank}` : `学期 ${r.semester_id}`;
+            printRecLine(
+                r.courses?.course_id ?? r.course_id,
+                r.courses?.name ?? "",
+                semLabel,
+            );
+        }
+    }
 }
 
 print_all();

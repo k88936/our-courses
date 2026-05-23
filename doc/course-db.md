@@ -151,3 +151,25 @@ Degree‑specific override of a `choice_sets` constraint (e.g. "AE students must
 | `max_select_override` | INT?                                     | Maximum courses for this degree (`NULL` = use `choice_sets.max_select`)       |
 
 **Example**: AE overrides the "Astrodynamics / Flight Dynamics" set to `min_select_override=1`.
+
+---
+
+### semesters
+Available semesters for course planning.
+
+| Column        | Type         | Description                             |
+|---------------|--------------|-----------------------------------------|
+| `semester_id` | INT PK       | Auto-increment ID                       |
+| `season`      | VARCHAR(20)  | `'Fall'`, `'Spring'`, or `'Summer'`     |
+| `year_rank`   | INT          | Academic year rank (e.g. 2024 = 2024–25)|
+
+---
+
+### course_recommended_semesters
+Recommends which semester(s) a course should be taken in.
+
+| Column        | Type                               | Description                         |
+|---------------|------------------------------------|-------------------------------------|
+| `id`          | SERIAL PK                          | Auto-increment                      |
+| `course_id`   | VARCHAR(20) → `courses.course_id`  | Target course                       |
+| `semester_id` | INT → `semesters.semester_id`      | Recommended semester                |

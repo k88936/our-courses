@@ -165,6 +165,39 @@ export type Database = {
           },
         ]
       }
+      course_recommended_semesters: {
+        Row: {
+          course_id: string
+          id: number
+          semester_id: number
+        }
+        Insert: {
+          course_id: string
+          id?: number
+          semester_id: number
+        }
+        Update: {
+          course_id?: string
+          id?: number
+          semester_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_recommended_semesters_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["course_id"]
+          },
+          {
+            foreignKeyName: "course_recommended_semesters_semester_id_fkey"
+            columns: ["semester_id"]
+            isOneToOne: false
+            referencedRelation: "semesters"
+            referencedColumns: ["semester_id"]
+          },
+        ]
+      }
       courses: {
         Row: {
           course_id: string
@@ -366,6 +399,24 @@ export type Database = {
           description?: string | null
           module_id?: number
           name?: string
+        }
+        Relationships: []
+      }
+      semesters: {
+        Row: {
+          season: string
+          semester_id: number
+          year_rank: number
+        }
+        Insert: {
+          season: string
+          semester_id?: number
+          year_rank: number
+        }
+        Update: {
+          season?: string
+          semester_id?: number
+          year_rank?: number
         }
         Relationships: []
       }
