@@ -142,6 +142,10 @@ async function main() {
     const modGroups = groupsList.filter((g) => g.module_id != null);
     const foundationGroups = groupsList.filter((g) => g.module_id == null);
 
+    for (const group of foundationGroups) {
+        printGroup(group, choiceSets, courses, prereqMap);
+    }
+
     for (const mod of modules) {
         console.log(`\n模块 ${mod.module_id}：${mod.name}`);
         const mg = modGroups
@@ -152,9 +156,6 @@ async function main() {
         }
     }
 
-    for (const group of foundationGroups) {
-        printGroup(group, choiceSets, courses, prereqMap);
-    }
 
     const {tracks} = await fetchDegreeData();
     console.log(`\n课程要求\n`);
