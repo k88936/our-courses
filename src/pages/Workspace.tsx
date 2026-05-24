@@ -1,4 +1,4 @@
-import {useState, useMemo, useRef, useEffect} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import Button from "@jetbrains/ring-ui-built/components/button/button";
 import Input from "@jetbrains/ring-ui-built/components/input/input";
 import Island, {Content, Header} from "@jetbrains/ring-ui-built/components/island/island";
@@ -7,18 +7,9 @@ import {Navbar, type NavPage} from "../components/Navbar";
 import {useLocale} from "../i18n/LocaleContext";
 import {useAppTheme} from "../theme/ThemeContext";
 import {useSemester} from "../hooks/SemesterContext";
-import {
-  useCourses,
-  useSemesterCourses,
-  useModules,
-  useAllSemesters,
-  useCourseGroups,
-  useTName,
-} from "../hooks/useCurriculumData";
-import structuredData from "@/data/structured_data.json";
-import enData from "@/data/courses_en.json";
-import type { Database } from "@/database.types";
-type Course = Database["public"]["Tables"]["courses"]["Row"];
+import {useCurriculumData} from "../hooks/useCurriculumData";
+import {useTName} from "@/i18n/utils";
+
 
 interface WorkspaceProps {
   onNavigate?: (page: NavPage) => void;
@@ -31,47 +22,11 @@ interface FilterState {
   abGroup: string;
 }
 
-/** Foundation category labels — zh */
-const FOUNDATION_ZH: Record<string, string> = {
-  MATH_BASIS: "数学基础",
-  PHY_BASIS: "物理基础",
-  CS_BASIS: "信智基础",
-  ME_BASIS: "机电基础",
-  COMP_BASIS: "计算基础",
-  OR_STAT: "运筹统计",
-  MECH_BASIS: "力学基础",
-  SHUYUAN_GE: "书院通识",
-  SHIJIAN: "进阶实践",
-};
-
-/** Foundation category labels — en (short) */
-const FOUNDATION_EN: Record<string, string> = {
-  MATH_BASIS: "Math Found.",
-  PHY_BASIS: "Physics Found.",
-  CS_BASIS: "CS & AI Found.",
-  ME_BASIS: "ME Found.",
-  COMP_BASIS: "Computing",
-  OR_STAT: "OR & Stat.",
-  MECH_BASIS: "Mech. Found.",
-  SHUYUAN_GE: "Academy GE",
-  SHIJIAN: "Practice",
-};
-
-/** Abbreviate semester: "大一·开学前（军训）" → "大一夏" */
-const abbreviateSemester = (sem: string): string =>
-  sem
-    .replace("·开学前（军训）", "军")
-    .replace("·秋季", "秋")
-    .replace("·春季", "春")
-    .replace("·夏季", "夏");
-
-/** Module ID → 类 label */
-const moduleTypeLabel = (modId: number): string =>
-  modId <= 3 ? "I" : modId <= 8 ? "II" : "III";
-
-/** Format module option display */
-const formatModuleOption = (modId: number, name: string, locale: string): string =>
-  locale === "zh" ? `模块${modId}：${name}` : `Module ${modId}: ${name}`;
+  // ---- Semester helpers ----
+  const YEAR_LABELS: Record<number, string> = { 1: "大一", 2: "大二", 3: "大三", 4: "大四" };
+  function buildSemesterName(yearRank: number, season: string): string {
+    return `${YEAR_LABELS[yearRank] ?? `第${yearRank}年`}·${season}`;
+  }
 
 export const Workspace = ({onNavigate}: WorkspaceProps) => {
   const {t, locale} = useLocale();
@@ -121,13 +76,35 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- Data ---
-  const {data: courses} = useCourses();
-  const {data: semesterCourses} = useSemesterCourses();
-  const {data: semesters} = useAllSemesters();
-  const {data: modules} = useModules();
-  const {data: allGroups} = useCourseGroups();
+  const { data: allData, loading } = useCurriculumData();
+
+  const courses = useMemo(() => allData ? Object.values(allData.courseData.courses) as Course[] : [], [allData]);
+  const modules = useMemo(() => allData ? allData.courseData.modules : [], [allData]);
+  const allGroups = useMemo(() => allData ? Object.values(allData.courseData.groups) as Group[] : [], [allData]);
+  const prereqsData = useMemo(() => allData ? allData.courseData.prereqs : [], [allData]);
+  const choiceSetsData = useMemo(() => allData ? Object.values(allData.courseData.choiceSets) : [], [allData]);
+  const choiceSetCoursesData = useMemo(() => allData
+    ? allData.courseData.choiceSets.flatMap((cs) => cs.course_ids.map((cid) => ({ set_id: cs.set_id, course_id: cid })))
+    : [], [allData]);
+  const groupCoursesData = useMemo(() => allData
+    ? Object.values(allData.courseData.groups).map((g) => ({ group_id: g.group_id, course_ids: g.course_ids }))
+    : [], [allData]);
 
   const courseMap = useMemo(() => new Map(courses.map((c) => [c.course_id, c])), [courses]);
+
+  const semesterCourses = useMemo(() => {
+    if (!allData) return [];
+    const result: Array<{ semester: string; course_id: number; course_name: string }> = [];
+    for (const sem of allData.teachPlanData.seminars) {
+      const semName = buildSemesterName(sem.year_rank, sem.season);
+      for (const cid of sem.course_ids) {
+        result.push({ semester: semName, course_id: cid, course_name: courseMap.get(cid)?.name ?? "" });
+      }
+    }
+    return result;
+  }, [allData, courseMap]);
+
+  const semesters = useMemo(() => [...new Set(semesterCourses.map((sc) => sc.semester))].sort(), [semesterCourses]);
 
   const currentIdx = semesters.indexOf(currentSemester);
   const historySemesters = currentIdx >= 0
@@ -209,40 +186,39 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   };
 
   const calcSemesterCredits = (sem: string, selected: string[]): number => {
-    const courseCredits = selected.reduce((s, cid) => s + (courseMap.get(cid)?.credits ?? 0), 0);
+    const courseCredits = selected.reduce((s, cid) => s + (courseMap.get(Number(cid))?.credits ?? 0), 0);
     const customCreds = (customCourses[sem] ?? []).reduce((s, c) => s + c.credits, 0);
     return courseCredits + customCreds;
   };
 
-  // --- Prerequisite map ---
   const prereqMap = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const p of structuredData.course_prerequisites) {
-      const prev = map.get(p.course_id) ?? [];
-      prev.push(p.prereq_course_id);
-      map.set(p.course_id, prev);
+    for (const p of prereqsData) {
+      const cid = String(p.course_id);
+      const prev = map.get(cid) ?? [];
+      prev.push(String(p.prereq_course_id));
+      map.set(cid, prev);
     }
     return map;
-  }, []);
+  }, [prereqsData]);
 
-  // --- Choice set lookup (set_id → course_ids[]) ---
   const choiceSetCourseMap = useMemo(() => {
-    const map = new Map<number, string[]>();
-    for (const sc of structuredData.choice_set_courses) {
+    const map = new Map<number, number[]>();
+    for (const sc of choiceSetCoursesData) {
       const prev = map.get(sc.set_id) ?? [];
       prev.push(sc.course_id);
       map.set(sc.set_id, prev);
     }
     return map;
-  }, []);
+  }, [choiceSetCoursesData]);
 
   const choiceSetMap = useMemo(() => {
-    const map = new Map<number, typeof structuredData.choice_sets[0]>();
-    for (const cs of structuredData.choice_sets) {
+    const map = new Map<number, (typeof choiceSetsData)[0]>();
+    for (const cs of choiceSetsData) {
       map.set(cs.set_id, cs);
     }
     return map;
-  }, []);
+  }, [choiceSetsData]);
 
   // PE courses by semester
   const PE_BY_SEMESTER: Record<string, string[]> = {
@@ -258,13 +234,13 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
   // Course → choice sets it belongs to (for multi-select display)
   const courseChoiceSets = useMemo(() => {
-    const map = new Map<string, Array<{setId: number; setName: string; minSelect: number; maxSelect: number; siblings: Array<{courseId: string; name: string}>}>>();
+    const map = new Map<number, Array<{setId: number; setName: string; minSelect: number; maxSelect: number; siblings: Array<{courseId: number; name: string}>}>>();
     for (const [setId, courseIds] of choiceSetCourseMap.entries()) {
       const cs = choiceSetMap.get(setId);
       if (!cs) continue;
       const siblings = courseIds.map((cid) => ({
         courseId: cid,
-        name: courseMap.get(cid)?.name ?? cid,
+        name: courseMap.get(cid)?.name ?? String(cid),
       }));
       for (const cid of courseIds) {
         const prev = map.get(cid) ?? [];
@@ -304,8 +280,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       const prereqs = prereqMap.get(cid) ?? [];
       for (const pid of prereqs) {
         if (!allTaken.has(pid)) {
-          const cName = tName(cid, courseMap.get(cid)?.name ?? cid);
-          const pName = tName(pid, courseMap.get(pid)?.name ?? pid);
+          const cName = tName(cid, courseMap.get(Number(cid))?.name ?? cid);
+          const pName = tName(pid, courseMap.get(Number(pid))?.name ?? pid);
           checks.push({
             type: "warning",
             msg: locale === "zh" ? `「${cName}」需先修「${pName}」` : `"${cName}" needs prereq "${pName}"`,
@@ -318,8 +294,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     for (const [setId, setCourseIds] of choiceSetCourseMap.entries()) {
       const cs = choiceSetMap.get(setId);
       if (!cs) continue;
-      const selectedInSet = selected.filter((cid) => setCourseIds.includes(cid));
-      const totalInSet = [...allTaken].filter((cid) => setCourseIds.includes(cid)).length;
+      const selectedInSet = selected.filter((cid) => setCourseIds.includes(Number(cid)));
+      const totalInSet = [...allTaken].filter((cid) => setCourseIds.includes(Number(cid))).length;
       if (totalInSet > (cs.max_select ?? 1)) {
         checks.push({
           type: "warning",
@@ -338,10 +314,10 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       for (const [otherSem, ids] of Object.entries(savedHistory)) {
         if (otherSem === sem) continue;
         if (ids.includes(cid)) {
-          const cName = tName(cid, courseMap.get(cid)?.name ?? cid);
+          const cName = tName(cid, courseMap.get(Number(cid))?.name ?? cid);
           checks.push({
             type: "error",
-            msg: locale === "zh" ? `「${cName}」已在 ${abbreviateSemester(otherSem)} 中选择过` : `"${cName}" already taken in ${abbreviateSemester(otherSem)}`,
+            msg: `「${cName}」已在 ${otherSem} 中选择过`,
           });
           break;
         }
@@ -439,19 +415,20 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     reader.readAsText(file);
   };
 
-  const toggleSelected = (courseId: string) => {
+  const toggleSelected = (courseId: number) => {
+    const courseIdStr = String(courseId);
     // Build full set of all taken courses across all history + current selection
     const allTaken = new Set(selectedCourses);
     for (const [, ids] of Object.entries(savedHistory)) {
       ids.forEach((id) => allTaken.add(id));
     }
 
-    const isAlreadySelected = selectedCourses.has(courseId);
+    const isAlreadySelected = selectedCourses.has(courseIdStr);
     if (!isAlreadySelected) {
       // Check duplicate: course already in savedHistory
       let foundInHistory = false;
       for (const [, ids] of Object.entries(savedHistory)) {
-        if (ids.includes(courseId)) { foundInHistory = true; break; }
+        if (ids.includes(courseIdStr)) { foundInHistory = true; break; }
       }
       if (foundInHistory) {
         // We still let them add it, but run choice set conflict check below
@@ -461,13 +438,13 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       const csInfo = courseChoiceSets.get(courseId);
       if (csInfo && csInfo.length > 0) {
         for (const cs of csInfo) {
-          const conflictSibling = cs.siblings.find((s) => allTaken.has(s.courseId));
+          const conflictSibling = cs.siblings.find((s) => allTaken.has(String(s.courseId)));
           if (conflictSibling) {
             setChoiceConflict({
-              courseId,
-              courseName: courseMap.get(courseId)?.name ?? courseId,
+              courseId: courseIdStr,
+              courseName: courseMap.get(courseId)?.name ?? courseIdStr,
               setName: cs.setName,
-              conflictId: conflictSibling.courseId,
+              conflictId: String(conflictSibling.courseId),
               conflictName: conflictSibling.name,
             });
             return;
@@ -477,8 +454,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     }
     setSelectedCourses((prev) => {
       const next = new Set(prev);
-      if (next.has(courseId)) next.delete(courseId);
-      else next.add(courseId);
+      if (next.has(courseIdStr)) next.delete(courseIdStr);
+      else next.add(courseIdStr);
       return next;
     });
   };
@@ -495,7 +472,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   }, [semesterCourses, courseMap]);
 
   const courseSemesterMap = useMemo(() => {
-    const m = new Map<string, string[]>();
+    const m = new Map<number, string[]>();
     for (const sc of semesterCourses) {
       const prev = m.get(sc.course_id) ?? [];
       prev.push(sc.semester);
@@ -507,8 +484,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   const groupMap = useMemo(() => new Map(allGroups.map((g) => [g.group_id, g])), [allGroups]);
 
   const courseGroupInfo = useMemo(() => {
-    const map = new Map<string, Array<{groupCode: string; moduleId: number | null; groupName: string}>>();
-    for (const gc of structuredData.group_courses) {
+    const map = new Map<number, Array<{groupCode: string; moduleId: number | null; groupName: string}>>();
+    for (const gc of groupCoursesData) {
       const group = groupMap.get(gc.group_id);
       if (!group) continue;
       for (const cid of gc.course_ids) {
@@ -518,16 +495,9 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       }
     }
     return map;
-  }, [groupMap]);
+  }, [groupMap, groupCoursesData]);
 
-  // --- enName lookup ---
-  const enNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const [id, en] of Object.entries(enData.courses as Record<string, string>)) {
-      map.set(id, en);
-    }
-    return map;
-  }, []);
+
 
   // --- Validation logic ---
   const [validationErrors, setValidationErrors] = useState<string[] | null>(null);
@@ -543,17 +513,13 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     }
   }, [selectedCourses, stagingSemester]);
 
-  // --- Category display (locale-aware) ---
-  const CAT_LABELS = locale === "zh" ? FOUNDATION_ZH : FOUNDATION_EN;
-
-  const getCourseCategories = (courseId: string): string[] => {
+  const getCourseCategories = (courseId: number): string[] => {
     const infos = courseGroupInfo.get(courseId) ?? [];
     const categories = infos.map((info) => {
       if (info.moduleId === null) {
-        return CAT_LABELS[info.groupCode] ?? info.groupName;
+        return info.groupName;
       }
-      const type = moduleTypeLabel(info.moduleId);
-      return locale === "zh" ? `${type}类${info.groupCode}` : `${type}-${info.groupCode}`;
+      return `${info.groupName}`;
     });
     return [...new Set(categories)];
   };
@@ -614,7 +580,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
   // Course → module IDs it belongs to
   const courseModuleMap = useMemo(() => {
-    const map = new Map<string, Set<number>>();
+    const map = new Map<number, Set<number>>();
     for (const [cid, infos] of courseGroupInfo) {
       for (const info of infos) {
         if (info.moduleId !== null) {
@@ -629,15 +595,15 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
 
   // Foundation group → course_ids
   const foundationCourseIds = useMemo(() => {
-    const map = new Map<number, Set<string>>();
-    for (const gc of structuredData.group_courses) {
+    const map = new Map<number, Set<number>>();
+    for (const gc of groupCoursesData) {
       if (FOUNDATION_GROUP_IDS.has(gc.group_id)) {
         const set = new Set(gc.course_ids);
         map.set(gc.group_id, set);
       }
     }
     return map;
-  }, [FOUNDATION_GROUP_IDS]);
+  }, [FOUNDATION_GROUP_IDS, groupCoursesData]);
 
   // All selected course IDs across history + current staging
   const allSelectedIds = useMemo(() => {
@@ -651,11 +617,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
   // --- Module scoring config (per-module per-course A/B scores) ---
   const moduleScoringConfig = useMemo(() => {
     const modConfig = new Map<number, {aPerCourse: number; bPerCourse: number}>();
-    const courseModInfo = new Map<string, Map<number, {isA: boolean; isB: boolean}>>();
+    const courseModInfo = new Map<number, Map<number, {isA: boolean; isB: boolean}>>();
     const modACount = new Map<number, number>();
     const modBCount = new Map<number, number>();
 
-    for (const gc of structuredData.group_courses) {
+    for (const gc of groupCoursesData) {
       const group = groupMap.get(gc.group_id);
       if (!group || group.module_id === null) continue;
       const isA = group.group_code.endsWith("A");
@@ -682,7 +648,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     }
 
     return {modConfig, courseModInfo};
-  }, [groupMap]);
+  }, [groupMap, groupCoursesData]);
 
   // --- Module score map (accumulated from selected courses) ---
   const moduleScoreMap = useMemo(() => {
@@ -716,7 +682,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
         const g = groupMap.get(gid);
         if (g && g.group_code === gCode) {
           let cnt = 0;
-          for (const cid of allSelectedIds) { if (cids.has(cid)) cnt++; }
+          for (const cid of allSelectedIds) { if (cids.has(Number(cid))) cnt++; }
           if (cnt >= 2) map.set(gCode, 80);
         }
       }
@@ -736,8 +702,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       : false;
 
     // 书院通识/进阶实践 courses in staging semester + whether still needed
-    const stagingShuyuanIds = new Set<string>();
-    const stagingShijianIds = new Set<string>();
+    const stagingShuyuanIds = new Set<number>();
+    const stagingShijianIds = new Set<number>();
     for (const cid of stagingCourseIds) {
       const infos = courseGroupInfo.get(cid) ?? [];
       for (const info of infos) {
@@ -745,8 +711,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
         if (info.groupCode === "SHIJIAN") stagingShijianIds.add(cid);
       }
     }
-    const needShuyuan = stagingShuyuanIds.size > 0 && ![...allSelectedIds].some((id) => stagingShuyuanIds.has(id));
-    const needShijian = stagingShijianIds.size > 0 && ![...allSelectedIds].some((id) => stagingShijianIds.has(id));
+    const needShuyuan = stagingShuyuanIds.size > 0 && ![...allSelectedIds].some((id) => stagingShuyuanIds.has(Number(id)));
+    const needShijian = stagingShijianIds.size > 0 && ![...allSelectedIds].some((id) => stagingShijianIds.has(Number(id)));
 
     // All special-course IDs in staging (for scoring boost)
     const stagingSpecialIds = new Set([...stagingShuyuanIds, ...stagingShijianIds]);
@@ -754,19 +720,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     return {stagingCourseIds, peCourseIds, isSummer, needPe, needShuyuan, needShijian, stagingSpecialIds};
   }, [stagingSemester, semesterMap, courseGroupInfo, allSelectedIds]);
 
-  // --- Per-course semester bonus map ---
-  const COURSE_BONUS: Record<string, Array<{semesterMatch: string; bonus: number}>> = {
-    "10691342": [{semesterMatch: "大一·秋季", bonus: 62}],
-    "30160023": [{semesterMatch: "大一·春季", bonus: 62}],
-    "24100023": [{semesterMatch: "大一·秋季", bonus: 61}],
-    "14920032": [{semesterMatch: "大一·春季", bonus: 61}],
-    "10421403": [{semesterMatch: "大一·春季", bonus: 61}],
-    "44100203": [{semesterMatch: "大二·秋季", bonus: 11}],
-  };
+
 
   // --- Recommendation scores ---
   const courseScores = useMemo(() => {
-    const scores = new Map<string, number>();
+    const scores = new Map<number, number>();
     const {courseModInfo} = moduleScoringConfig;
     const {stagingCourseIds, peCourseIds, needPe, stagingSpecialIds} = stagingCourseInfo;
 
@@ -783,19 +741,20 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
     ];
 
     for (const c of courses) {
+      const cid = c.course_id;
       let score = 0;
 
       // Special: PE +400 if needed and in staging semester
-      if (needPe && peCourseIds.has(c.course_id)) score += 400;
+      if (needPe && peCourseIds.has(String(cid))) score += 400;
 
       // Special: 书院通识/进阶实践 in staging semester +400
-      if (stagingSpecialIds.has(c.course_id)) score += 400;
+      if (stagingSpecialIds.has(cid)) score += 400;
 
       // Semester boost: courses in staging semester +100
-      if (stagingCourseIds.has(c.course_id)) score += 100;
+      if (stagingCourseIds.has(cid)) score += 100;
 
       // Foundation boost: max applicable foundation direction (+80)
-      const cMods = courseModuleMap.get(c.course_id);
+      const cMods = courseModuleMap.get(cid);
       if (cMods && foundationActive.size > 0) {
         let maxF = 0;
         for (const [gCode, fScore] of foundationActive) {
@@ -808,7 +767,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       }
 
       // Module boost: max module score among modules this course belongs to
-      const cm = courseModInfo.get(c.course_id);
+      const cm = courseModInfo.get(cid);
       if (cm) {
         let maxMod = 0;
         for (const [modId] of cm) {
@@ -819,25 +778,15 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       }
 
       // Category extra: +10 per category (min 1)
-      const cats = courseGroupInfo.get(c.course_id) ?? [];
+      const cats = courseGroupInfo.get(cid) ?? [];
       score += Math.max(cats.length, 1) * 10;
 
-      // Per-course semester-specific bonus
-      const bonusRules = COURSE_BONUS[c.course_id];
-      if (bonusRules && stagingSemester) {
-        for (const rule of bonusRules) {
-          if (rule.semesterMatch === stagingSemester) {
-            score += rule.bonus;
-          }
-        }
-      }
-
       // History deduction: courses already recorded in history get -400
-      if (historyCourseIds.has(c.course_id)) {
+      if (historyCourseIds.has(String(cid))) {
         score -= 400;
       }
 
-      scores.set(c.course_id, score);
+      scores.set(cid, score);
     }
 
     return scores;
@@ -858,15 +807,15 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
       const isNewQuery = q === "新开课" || q === "新开" || q === "new course";
       result = result.filter((c) => {
         // "新开课"/"新开"/"new course" → show all NEW-id courses
-        if (isNewQuery && c.course_id.startsWith("NEW")) return true;
+        if (isNewQuery && String(c.course_id).startsWith("NEW")) return true;
 
         // Pure numeric query should NOT match NEW-id (e.g. "007" should not match "NEW007")
-        if (c.course_id.startsWith("NEW") && /^\d+$/.test(q)) return false;
+        if (String(c.course_id).startsWith("NEW") && /^\d+$/.test(q)) return false;
 
         return (
-          c.course_id.toLowerCase().includes(q) ||
+          c.course_id !== null && (String(c.course_id).toLowerCase().includes(q) ||
           c.name.toLowerCase().includes(q) ||
-          tName(c.course_id, c.name).toLowerCase().includes(q)
+          tName(c.course_id, c.name).toLowerCase().includes(q))
         );
       });
     }
@@ -1003,7 +952,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                     // Get saved course IDs for this semester
                     const savedIds = savedHistory[sem] ?? [];
                     // Get full course objects for display
-                    const savedCourses = savedIds.map((id) => courseMap.get(id)).filter(Boolean) as typeof courses;
+                    const savedCourses = savedIds.map((id) => courseMap.get(Number(id))).filter(Boolean) as typeof courses;
                     // Custom courses for this semester
                     const semesterCustom = customCourses[sem] ?? [];
                     const totalDisplayCourses = savedCourses.length + semesterCustom.length;
@@ -1022,7 +971,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
                             <span className={`text-xs font-semibold ${textDark}`}>
-                              {locale === "zh" ? abbreviateSemester(sem) : tSemester(sem)}
+                              {sem}
                             </span>
                             {hasSaved && semesters.indexOf(sem) > currentIdx && (
                               <span className={`rounded px-1 py-0.5 text-[9px] font-medium leading-none ${
@@ -1176,7 +1125,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           <div className={`flex items-center gap-1 font-medium ${
                             hasError ? (isDark ? "text-red-300" : "text-red-600") : (isDark ? "text-yellow-300" : "text-yellow-700")
                           }`}>
-                            {hasError ? "✕" : "⚠"} {locale === "zh" ? abbreviateSemester(entry.sem) : tSemester(entry.sem)}
+                             {hasError ? "✕" : "⚠"} {entry.sem}
                           </div>
                           {remaining.map((c, i) => {
                             const diagKey = `${entry.sem}_${entry.checks.indexOf(c)}`;
@@ -1248,7 +1197,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           }, 0);
                           const pastCredits = pastSems.reduce((sum, s) => {
                             const ids = savedHistory[s] ?? [];
-                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(cid)?.credits ?? 0), 0);
+                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(Number(cid))?.credits ?? 0), 0);
                             const custCred = (customCourses[s] ?? []).reduce((s2, c) => s2 + c.credits, 0);
                             return sum + cCred + custCred;
                           }, 0);
@@ -1258,7 +1207,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           }, 0);
                           const futureCredits = futureSems.reduce((sum, s) => {
                             const ids = savedHistory[s] ?? [];
-                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(cid)?.credits ?? 0), 0);
+                            const cCred = ids.reduce((s2, cid) => s2 + (courseMap.get(Number(cid))?.credits ?? 0), 0);
                             const custCred = (customCourses[s] ?? []).reduce((s2, c) => s2 + c.credits, 0);
                             return sum + cCred + custCred;
                           }, 0);
@@ -1289,11 +1238,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   <Select
                     data={allStagingOptions.map((s) => ({
                       key: s,
-                      label: locale === "zh" ? abbreviateSemester(s) : tSemester(s),
+                      label: s,
                     }))}
                     selected={{
                       key: stagingSemester,
-                      label: locale === "zh" ? abbreviateSemester(stagingSemester) : tSemester(stagingSemester),
+                      label: stagingSemester,
                     }}
                     onSelect={(opt) => opt && setStagingSemester(opt.key as string)}
                     label=""
@@ -1310,10 +1259,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   </div>
                 ) : (
                   [...selectedCourses].map((cid) => {
-                    const c = courseMap.get(cid);
+                    const cidNum = Number(cid);
+                    const c = courseMap.get(cidNum);
                     if (!c) return null;
                     // Check if this course has siblings in same choice sets
-                    const csInfo = courseChoiceSets.get(cid);
+                    const csInfo = courseChoiceSets.get(cidNum);
                     return (
                       <div
                         key={cid}
@@ -1329,7 +1279,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           </span>
                         )}
                         <button
-                          onClick={() => toggleSelected(cid)}
+                          onClick={() => toggleSelected(cidNum)}
                           className={`flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded border-none text-[10px] transition-colors ${
                             isDark
                               ? "bg-red-500/15 text-red-400 hover:bg-red-500/30"
@@ -1701,7 +1651,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                     const peCourseIdsLocal = new Set(PE_BY_SEMESTER[stagingSemester] ?? []);
                     const isSummerLocal = stagingSemester.includes("开学前") || stagingSemester.includes("夏季");
                     if (!isSummerLocal && peCourseIdsLocal.size > 0 && ![...selectedCourses].some((id) => peCourseIdsLocal.has(id))) {
-                      const peName = [...peCourseIdsLocal].map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
+                      const peName = [...peCourseIdsLocal].map((id) => tName(id, courseMap.get(Number(id))?.name ?? "")).join("/");
                       idx++;
                       lines.push(`${idx}.${locale === "zh" ? `须选择${peName}` : `Need ${peName}`}`);
                     }
@@ -1710,7 +1660,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                       const infos = courseGroupInfo.get(cid) ?? [];
                       return infos.some((i) => i.groupCode === "SHUYUAN_GE");
                     });
-                    if (shuyuanInStaging.length > 0 && !shuyuanInStaging.some((id) => selectedCourses.has(id))) {
+                    if (shuyuanInStaging.length > 0 && !shuyuanInStaging.some((id) => selectedCourses.has(String(id)))) {
                       const syName = shuyuanInStaging.map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
                       idx++;
                       lines.push(`${idx}.${locale === "zh" ? `须选择${syName}` : `Need ${syName}`}`);
@@ -1719,7 +1669,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                       const infos = courseGroupInfo.get(cid) ?? [];
                       return infos.some((i) => i.groupCode === "SHIJIAN");
                     });
-                    if (shijianInStaging.length > 0 && !shijianInStaging.some((id) => selectedCourses.has(id))) {
+                    if (shijianInStaging.length > 0 && !shijianInStaging.some((id) => selectedCourses.has(String(id)))) {
                       const sjName = shijianInStaging.map((id) => tName(id, courseMap.get(id)?.name ?? "")).join("/");
                       idx++;
                       lines.push(`${idx}.${locale === "zh" ? `须选择${sjName}` : `Need ${sjName}`}`);
@@ -1847,9 +1797,9 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                   const sems = courseSemesterMap.get(c.course_id) ?? [];
                   const semDisplay =
                     sems.length > 0
-                      ? sems.map((s) => (locale === "zh" ? abbreviateSemester(s) : tSemester(s))).join(", ")
+                      ? sems.join(", ")
                       : "—";
-                  const isSelected = selectedCourses.has(c.course_id);
+                  const isSelected = selectedCourses.has(String(c.course_id));
 
                   return (
                     <div
@@ -1874,7 +1824,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                       </button>
                       {/* Course ID */}
                       <span className={`w-20 shrink-0 truncate font-mono pt-0.5 ${textMuted}`} title={c.course_id}>
-                        {c.course_id.startsWith("NEW") ? "新开课" : c.course_id}
+                        {String(c.course_id).startsWith("NEW") ? "新开课" : c.course_id}
                       </span>
                       {/* Course name — click for detail */}
                       <span
@@ -1918,12 +1868,11 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
               {/* ===== Detail Popup ===== */}
               {detailCourse && (() => {
                 const dc = detailCourse;
-                const prereqIds = prereqMap.get(dc.course_id) ?? [];
+                const prereqIds = prereqMap.get(String(dc.course_id)) ?? [];
                 const prereqNames = prereqIds.map((pid) => {
-                  const c = courseMap.get(pid);
+                  const c = courseMap.get(Number(pid));
                   return c ? tName(pid, c.name) : pid;
                 });
-                const enName = enNameMap.get(dc.course_id);
                 return (
                   <div
                     className="fixed inset-0 z-50 flex items-start justify-center pt-16"
@@ -1945,13 +1894,8 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                       </div>
                       <div className="flex flex-col gap-2 px-4 py-3 text-xs">
                         <div className="flex justify-between">
-                          <span className={`font-mono ${textMuted}`}>{dc.course_id.startsWith("NEW") ? "新开课" : dc.course_id}</span>
+                          <span className={`font-mono ${textMuted}`}>{(dc.course_id)<0 ? "新开课" : dc.course_id}</span>
                         </div>
-                        {locale === "zh" && enName && (
-                          <div className="flex justify-between">
-                            <span className={textBody}>{enName}</span>
-                          </div>
-                        )}
                         <div className="flex justify-between">
                           <span className={textMuted}>{t("workspace.colCredits")}</span>
                           <span className={textDark}>{dc.credits}</span>
@@ -1968,7 +1912,7 @@ export const Workspace = ({onNavigate}: WorkspaceProps) => {
                           <span className={textMuted}>{t("workspace.filterSemester")}</span>
                           <span className={`text-right ${textDark}`}>
                             {(courseSemesterMap.get(dc.course_id) ?? []).length > 0
-                              ? (courseSemesterMap.get(dc.course_id) ?? []).map((s) => locale === "zh" ? abbreviateSemester(s) : tSemester(s)).join(", ")
+                              ? (courseSemesterMap.get(dc.course_id) ?? []).join(", ")
                               : "—"}
                           </span>
                         </div>

@@ -4,9 +4,9 @@ import Select from "@jetbrains/ring-ui-built/components/select/select";
 import {useLocale} from "../i18n/LocaleContext";
 import {useAppTheme} from "../theme/ThemeContext";
 import {useSemester} from "../hooks/SemesterContext";
-import {useTName} from "../hooks/useCurriculumData";
 import singleLogo from "../assets/OfCourses_singleLogo.ico";
 import duShi from "../assets/DuShi.png";
+import {useTName} from "@/i18n/utils.ts";
 
 export type NavPage = "home" | "curriculum" | "workspace" | "tools" | "about";
 
